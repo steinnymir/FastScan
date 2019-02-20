@@ -1,0 +1,6 @@
+numpy==1.16.1
+nidaqmx==0.5.7
+PyQt5==5.12
+PyQt5-sip==4.19.14
+pyqtgraph==0.10.0
+six==1.12.0
