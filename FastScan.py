@@ -30,6 +30,7 @@ from PyQt5.QtCore import QCoreApplication, QTimer
 from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
     QGroupBox,QSpinBox
 from nidaqmx.constants import Edge, AcquisitionType
+from nidaqmx import stream_readers
 from pyqtgraph.Qt import QtCore, QtGui
 
 from utilities.data import bin_dc_multi
@@ -118,7 +119,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.laser_trigger_frequency = 273000
         self.shaker_frequency = 10
-        self.n_periods = 10
+        self.n_periods = 1
 
         self.n_samples = int((self.laser_trigger_frequency / self.shaker_frequency) * self.n_periods)
 
@@ -173,7 +174,9 @@ class FastScanMainWindow(QMainWindow):
         self.iterations_spinbox = QSpinBox()
         box_finite_layout.addWidget(self.iterations_spinbox, 0, 0, 1, 1)
         self.iterations_spinbox.setMinimum(1)
-        self.iterations_spinbox.setValue(10)
+        self.finite_iterations = 10
+
+        self.iterations_spinbox.setValue(self.finite_iterations)
         self.iterations_spinbox.valueChanged.connect(self.set_iteration_number)
         self.start_finite_button = QPushButton('Go!')
         box_finite_layout.addWidget(self.start_finite_button, 0, 1, 1, 1)
@@ -263,25 +266,33 @@ class FastScanMainWindow(QMainWindow):
         self.streamer_thread = QtCore.QThread()
 
         self.streamer = Streamer(self.n_samples)
-        self.stramer.newData[np.ndarray].connect(self.on_streamer_data)
+        self.streamer.newData[np.ndarray].connect(self.on_streamer_data)
+        self.streamer.error.connect(self.on_thread_error)
+        self.streamer.moveToThread(self.streamer_thread)
         self.streamer_thread.started.connect(self.streamer.start_acquisition)
         self.streamer_thread.start()
 
     def stop_continuous_acquisition(self):
+        print('attempting to stop thread')
         self.streamer.stop_acquisition()
         self.streamer.kill()
+
 
     def start_finite_acquisition(self):
         self.streamer_thread = QtCore.QThread()
 
         self.streamer = Streamer(self.n_samples,self.finite_iterations)
         self.streamer.newData[np.ndarray].connect(self.on_streamer_data)
+        self.streamer.error.connect(self.on_thread_error)
         self.streamer.finished.connect(self.stop_finite_acquisition)
+        self.streamer.moveToThread(self.streamer_thread)
         self.streamer_thread.started.connect(self.streamer.start_acquisition)
         self.streamer_thread.start()
 
     def stop_finite_acquisition(self):
         self.streamer.kill()
+        del self.streamer
+        del self.streamer_thread
 
     def bin_data(self, data):
         if self.bins is None:
@@ -289,15 +300,23 @@ class FastScanMainWindow(QMainWindow):
         self.binner_thread = QtCore.QThread()
         self.binner = Streamer(self.n_samples)
         self.binner.newData[np.ndarray].connect(self.on_binner_data)
+        self.binner.error[list].connect(self.on_thread_error)
+        self.binner.moveToThread(self.binner_thread)
         self.binner_thread.started.connect(self.binner.work)
         self.binner_thread.start()
+
+    def on_thread_error(self,e):
+        print(e)
 
     def draw_plot(self, xd, yd):
         self.plot.setData(x=xd, y=yd)
 
-    @QtCore.pyqtSlot()
+    @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, data):
-        self.bin_data(data)
+        print('data recieved')
+        self.status_bar.showMessage('recieved Data')
+        self.draw_plot(np.linspace(0,len(data[0])-1,len(data[0])),data[1])
+        # self.bin_data(data)
 
     @QtCore.pyqtSlot()
     def on_binner_data(self, data):
@@ -313,7 +332,7 @@ class FastScanMainWindow(QMainWindow):
 class Streamer(QtCore.QObject):
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
-
+    error = QtCore.pyqtSignal(list)
     # progressChanged = QtCore.pyqtSignal(float)
     # stateChanged = QtCore.pyqtSignal(str)
 
@@ -324,39 +343,64 @@ class Streamer(QtCore.QObject):
         self.iterations = iterations
         self.data = np.zeros((3, n_samples))
 
-        self.task = nidaqmx.Task()
-        self.reader = nidaqmx.stream_readers.AnalogMultiChannelReader(self.in_stream)
-        self.task.ai_channels.add_ai_voltage_chan("Dev1/ai0")  # shaker position chanel
-        self.task.ai_channels.add_ai_voltage_chan("Dev1/ai1")  # signal chanel
-        self.task.ai_channels.add_ai_voltage_chan("Dev1/ai2")  # dark control chanel
-        self.task.timing.cfg_samp_clk_timing(1000000, source="/Dev1/PFI0",
-                                             active_edge=Edge.RISING,
-                                             sample_mode=AcquisitionType.CONTINUOUS)
+        # self.task = nidaqmx.Task()
+        # self.reader = stream_readers.AnalogMultiChannelReader(self.task.in_stream)
+        # self.task.ai_channels.add_ai_voltage_chan("Dev1/ai0")  # shaker position chanel
+        # self.task.ai_channels.add_ai_voltage_chan("Dev1/ai1")  # signal chanel
+        # self.task.ai_channels.add_ai_voltage_chan("Dev1/ai2")  # dark control chanel
+        # self.task.timing.cfg_samp_clk_timing(1000000, source="/Dev1/PFI0",
+        #                                      active_edge=Edge.RISING,
+        #                                      sample_mode=AcquisitionType.CONTINUOUS)
         self.acquire = False
+
+    def on_error(self,e):
+        self.error.emit(list(e))
 
     @QtCore.pyqtSlot()
     def start_acquisition(self):
-        self.acquire = True
-        self.task.start()
-        if self.iterations is None:
-            while self.acquire:
-                self.measure()
-        else:
-            for i in range(self.iterations):
-                self.measure()
-            self.stop_acquisition()
+        try:
+            with nidaqmx.Task() as task:
+
+                self.reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
+                print('reader initialized')
+                task.ai_channels.add_ai_voltage_chan("Dev1/ai0")  # shaker position chanel
+                task.ai_channels.add_ai_voltage_chan("Dev1/ai1")  # signal chanel
+                task.ai_channels.add_ai_voltage_chan("Dev1/ai2")  # dark control chanel
+                print('added tasks')
+                task.timing.cfg_samp_clk_timing(1000000, source="/Dev1/PFI0",
+                                                     active_edge=Edge.RISING,
+                                                     sample_mode=AcquisitionType.CONTINUOUS)
+                task.start()
+                print('started tasks')
+
+                self.acquire = True
+                if self.iterations is None:
+                    i=0
+                    while self.acquire:
+                        i+=1
+                        print('measuring cycle {}'.format(i))
+
+                        self.measure()
+                else:
+                    for i in range(self.iterations):
+                        self.measure()
+                    self.stop_acquisition()
+        except Exception as e:
+            self.on_error(e)
+
 
     @QtCore.pyqtSlot()
     def stop_acquisition(self):
+        print('thread got message to stop')
         if self.acquire:
             self.acquire = False
-            self.task.stop()
+            print('scheduled to stop')
             self.finished.emit()
 
     def measure(self):
         self.reader.read_many_sample(self.data, number_of_samples_per_channel=self.n_samples)
+        print('reader wrote data: {}'.format(self.data.mean()))
         self.newData.emit(self.data)
-        self.prevData = self.prevData
 
     @QtCore.pyqtSlot()
     def work(self):
@@ -364,13 +408,16 @@ class Streamer(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def kill(self):
-        self.task.close()
+        print('thread killed')
 
     def __exit__(self):
         self.kill()
 
 
 class Binner(QtCore.QObject):
+    newData = QtCore.pyqtSignal(np.ndarray)
+    error = QtCore.pyqtSignal(list)
+
     def __init__(self, data, bins):
         super().__init__()
         self.data_input = data
@@ -380,26 +427,29 @@ class Binner(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def work(self):
-        chunks = os.cpu_count()
-        data_split = np.split(self.data, chunks, axis=1)
-        args = []
-        for data in data_split:
-            args.append((data, self.bins))
-        pool = Pool(chunks)
-        results = pool.map(self.bin_method, args)
-        results = np.array(results)
+        try:
+            chunks = os.cpu_count()-2
+            data_split = np.split(self.data, chunks, axis=1)
+            args = []
+            for data in data_split:
+                args.append((data, self.bins))
+            pool = Pool(chunks)
+            results = pool.map(self.bin_method, args)
+            results = np.array(results)
 
-        binned_signal = []
-        normarray = []
+            binned_signal = []
+            normarray = []
 
-        for i in range(8):
-            binned_signal.append(results[i, 0, :])
-            normarray.append(results[i, 1, :])
-        binned_signal = np.nansum(np.array(binned_signal), 0)
-        normarray = np.nansum(np.array(normarray), 0)
+            for i in range(8):
+                binned_signal.append(results[i, 0, :])
+                normarray.append(results[i, 1, :])
+            binned_signal = np.nansum(np.array(binned_signal), 0)
+            normarray = np.nansum(np.array(normarray), 0)
 
-        self.data_output = binned_signal / normarray
-        self.newData.emit(self.data_output)
+            self.data_output = binned_signal / normarray
+            self.newData.emit(self.data_output)
+        except Exception as e:
+            self.error.emit(list[e])
 
 
 if __name__ == '__main__':
