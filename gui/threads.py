@@ -115,7 +115,7 @@ class Streamer(QtCore.QObject):
         self.newData.emit(self.data)
 
     def simulate_measure(self):
-        time.sleep(.9 * self.n_samples / 300000)
+        time.sleep(2 * self.n_samples / 300000)
         n = np.arange(len(self.data[0]))
         phase = np.random.rand(1) * 2 * np.pi
         self.data[0, :] = np.cos(n / 10000 + phase)
@@ -131,39 +131,58 @@ class Binner(QtCore.QObject):
     newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(list)
 
-    def __init__(self, data, bins):
+    def __init__(self, data, bins, multithreading=True):
         super().__init__()
         self.data_input = data
         self.bins = bins
         self.data_output = np.zeros_like(bins)
-        self.bin_method = bin_dc
+        self.multithreading = multithreading
+
+
 
     @QtCore.pyqtSlot()
     def work(self):
+        t0 = time.time()
         try:
-            chunks = os.cpu_count() - 2
-            data_split = np.split(self.data_input, chunks, axis=1)
-            args = []
-            for data in data_split:
-                args.append((data, self.bins))
-            pool = Pool(chunks)
-            results = pool.map(self.bin_method, args)
-            results = np.array(results)
-
-            binned_signal = []
-            normarray = []
-
-            for i in range(8):
-                binned_signal.append(results[i, 0, :])
-                normarray.append(results[i, 1, :])
-            binned_signal = np.nansum(np.array(binned_signal), 0)
-            normarray = np.nansum(np.array(normarray), 0)
-
-            self.data_output = binned_signal / normarray
-            print('data binned: emitting results')
-            self.newData.emit(self.data_output)
+            if self.multithreading:
+                self.bin_data_multi()
+            else:
+                self.bin_data()
         except Exception as e:
-            self.error.emit(list[e])
+            self.error.emit(e)
+        print('data binned: emitting results: {}\nprocessing time: {}'.format(type(self.data_output), time.time() - t0))
+        self.newData.emit(self.data_output)
+
+    def bin_data_multi(self):
+
+        chunks = os.cpu_count() - 1
+        data_split = np.split(self.data_input, chunks, axis=1)
+        args = []
+        for data in data_split:
+            args.append((data, self.bins))
+        print('data prepared, starting multiprocess')
+
+        pool = Pool(chunks)
+        results = pool.map(bin_dc_multi, args)
+        results = np.array(results)
+
+        binned_signal = []
+        normarray = []
+
+        for i in range(chunks):
+            binned_signal.append(results[i, 0, :])
+            normarray.append(results[i, 1, :])
+        binned_signal = np.nansum(np.array(binned_signal), 0)
+        normarray = np.nansum(np.array(normarray), 0)
+        print('binned data : shape {}'.format(self.data_output.shape))
+        self.data_output = binned_signal / normarray
+
+
+    def bin_data(self):
+
+        self.data_output = bin_dc(self.data_input,self.bins)
+
+
 
 
 

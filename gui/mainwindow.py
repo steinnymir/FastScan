@@ -19,7 +19,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-
+import os
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
@@ -27,7 +27,10 @@ from PyQt5.QtWidgets import QMainWindow, QWidget, QGridLayout, QHBoxLayout, QVBo
     QGroupBox, QSpinBox
 from pyqtgraph.Qt import QtCore, QtGui
 
+from multiprocessing import Pool
+
 from gui.threads import Streamer, Thread, Binner
+from utilities.data import bin_dc, bin_dc_multi
 
 
 class FastScanMainWindow(QMainWindow):
@@ -58,7 +61,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.laser_trigger_frequency = 273000
         self.shaker_frequency = 10
-        self.n_periods = 2
+        self.n_periods = 10
 
         self.n_samples = int((self.laser_trigger_frequency / self.shaker_frequency) * self.n_periods)
 
@@ -66,6 +69,9 @@ class FastScanMainWindow(QMainWindow):
         self.n_bins = 1000
         self.bin_cutoff = .02
 
+        self.unprocessed_data = np.zeros((3,0))
+
+        self._binning = False
 
     def setupUi(self):
         central_widget = QWidget(self)
@@ -169,7 +175,13 @@ class FastScanMainWindow(QMainWindow):
     def on_streamer_data(self, data):
         print('stream data recieved')
         self.draw_top_plot(np.linspace(0, len(data[0]) - 1, len(data[0])), data[1])
-        # self.bin_data(data)
+
+        self.unprocessed_data = np.append(self.unprocessed_data, data, axis=1)
+        print(self.unprocessed_data.shape,data.shape)
+        if not self._binning:
+            print('binning data of shape {}'.format(self.unprocessed_data.shape))
+            self.bin_data(self.unprocessed_data)
+            self.unprocessed_data = np.zeros((3,0))
 
     def on_streamer_finished(self):
         print('streamer finished signal recieved')
@@ -180,6 +192,7 @@ class FastScanMainWindow(QMainWindow):
         self.streamer = None
 
     def bin_data(self, data):
+        self._binning = True
         if self.bins is None:
             self.make_bins(data)
         self.binner_thread = Thread()
@@ -192,18 +205,21 @@ class FastScanMainWindow(QMainWindow):
         self.binner_thread.started.connect(self.binner.work)
         self.binner_thread.start()
 
-    @QtCore.pyqtSlot()
+
+    @QtCore.pyqtSlot(np.ndarray)
     def on_binner_data(self, data):
+        self._binning = False
+        self.binner_thread.exit()
         self.draw_bot_plot(self.bins, data)
 
     def on_binner_finished(self):
         print('streamer finished signal recieved')
 
     def kill_binner_thread(self):
-        print('streamer Thread finished, deleting instance')
+        print('binner Thread finished, deleting instance')
         self.binner_thread = None
         self.binner = None
-
+    #
     def raise_thread_error(self, e):
         print('Rising error from thread')
         print(e)
