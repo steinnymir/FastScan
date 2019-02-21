@@ -29,7 +29,7 @@ def bin_dc(data,bins):
     for i in range(data.shape[1]//2):
         ii = 2*i
         j = (np.abs(bins - data[0][ii])).argmin()
-        binned_signal[j] += (data[1][ii]+data[1][ii+1])/2
+        binned_signal[j] += (data[1][ii]-data[1][ii+1])
         normarray[j]+=1
     return binned_signal/normarray
 
@@ -50,7 +50,7 @@ def bin_dc_multi(arguments):
     for i in range(data.shape[1]//2):
         ii = 2*i
         j = (np.abs(bins - data[0][ii])).argmin()
-        binned_signal[j] += (data[1][ii]+data[1][ii+1])/2
+        binned_signal[j] += (data[1][ii]-data[1][ii+1])
         normarray[j]+=1
     return binned_signal, normarray
 
