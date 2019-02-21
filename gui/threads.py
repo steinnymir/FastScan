@@ -44,7 +44,7 @@ class Streamer(QtCore.QObject):
     newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(OSError)
 
-    def __init__(self, n_samples, iterations=None, simulate=True):
+    def __init__(self, n_samples, iterations=None, simulate=False):
         super().__init__()
 
         self.n_samples = n_samples
@@ -80,7 +80,7 @@ class Streamer(QtCore.QObject):
                         i += 1
                         print('measuring cycle {}'.format(i))
                         self.measure()
-                        if i>= self.iterations:
+                        if self.iterations is not None and i>= self.iterations:
                             self.should_stop = True
                         if self.should_stop:
                             print('loop broken, acquisition stopped.')
@@ -129,7 +129,7 @@ class Streamer(QtCore.QObject):
 
 class Binner(QtCore.QObject):
     newData = QtCore.pyqtSignal(np.ndarray)
-    error = QtCore.pyqtSignal(list)
+    error = QtCore.pyqtSignal(OSError)
 
     def __init__(self, data, bins, multithreading=True):
         super().__init__()
@@ -155,8 +155,15 @@ class Binner(QtCore.QObject):
 
     def bin_data_multi(self):
 
-        chunks = os.cpu_count() - 1
-        data_split = np.split(self.data_input, chunks, axis=1)
+
+        chunks = os.cpu_count()
+        for i in range(os.cpu_count()):
+            chunks = os.cpu_count()-1-i
+            try:
+                data_split = np.split(self.data_input, chunks, axis=1)
+                break
+            except ValueError:
+                pass
         args = []
         for data in data_split:
             args.append((data, self.bins))
