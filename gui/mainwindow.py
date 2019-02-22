@@ -34,7 +34,7 @@ from utilities.data import bin_dc, bin_dc_multi
 
 
 class FastScanMainWindow(QMainWindow):
-    _SIMULATE = True
+    _SIMULATE = False
 
     def __init__(self):
         super(FastScanMainWindow, self).__init__()
@@ -61,7 +61,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.laser_trigger_frequency = 273000
         self.shaker_frequency = 10
-        self.n_periods = 2
+        self.n_periods = 10
 
         self.n_samples = int((self.laser_trigger_frequency / self.shaker_frequency) * self.n_periods)
 
@@ -71,7 +71,7 @@ class FastScanMainWindow(QMainWindow):
         self.signal_averages = []
         self.current_average = np.zeros_like(self.time_axis)
 
-        self.dark_control = True
+        self.dark_control = False
         self.pp_method = Projector # project or bin: these are the accepted methods
 
         self.unprocessed_data = np.zeros((3,0))

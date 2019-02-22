@@ -78,10 +78,9 @@ def project_to_time_axis(data,n_points,dark_control=True):
             if data[2,i] == 0:
                 result[pos_bin[i]] -= data[1,i]
     else:
-        for val,p,dc in zip(data[1],pos_bin,data[2]):
-            if dc==1:
-                result[p] += val
-                normarray[p]+=1
+        for val,p in zip(data[1],pos_bin):
+            result[p] += val
+            normarray[p]+=1
     norm_res = result/normarray
     x_axis = np.linspace(minpos,maxpos,n_points)
     return x_axis, norm_res
