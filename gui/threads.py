@@ -20,37 +20,49 @@
 
 """
 
-import os
-from multiprocessing import Pool
+import os, sys
 import time
+from multiprocessing import Pool
 
 import nidaqmx
 import numpy as np
+from PyQt5 import QtCore
 from nidaqmx import stream_readers
 from nidaqmx.constants import Edge, AcquisitionType
-from PyQt5 import QtCore
 
-from utilities.data import bin_dc_multi, bin_dc
+from utilities.data import bin_dc_multi, bin_dc, project_to_time_axis
+from utilities.math import gaussian
+
 
 class Thread(QtCore.QThread):
     stopped = QtCore.pyqtSignal()
+
     def stop(self):
         self.threadactive = False
         self.wait()
         self.stopped.emit()
 
-class Streamer(QtCore.QObject):
+
+class Worker(QtCore.QObject):
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(OSError)
 
-    def __init__(self, n_samples, iterations=None, simulate=False):
+    def on_error(self, e):
+        print('error in {} class'.format(type(self)))
+        self.error.emit(e)
+
+
+class Streamer(Worker):
+
+    def __init__(self, n_samples, iterations=None, simulate=False, dark_control=True):
         super().__init__()
 
         self.n_samples = n_samples
         self.iterations = iterations
         self.data = np.zeros((3, n_samples))
         self.simulate = simulate
+        self.dark_control = dark_control
 
         self.should_stop = True
 
@@ -80,7 +92,7 @@ class Streamer(QtCore.QObject):
                         i += 1
                         print('measuring cycle {}'.format(i))
                         self.measure()
-                        if self.iterations is not None and i>= self.iterations:
+                        if self.iterations is not None and i >= self.iterations:
                             self.should_stop = True
                         if self.should_stop:
                             print('loop broken, acquisition stopped.')
@@ -115,30 +127,30 @@ class Streamer(QtCore.QObject):
         self.newData.emit(self.data)
 
     def simulate_measure(self):
-        time.sleep(2 * self.n_samples / 300000)
+        time.sleep(self.n_samples / 300000)
         n = np.arange(len(self.data[0]))
         phase = np.random.rand(1) * 2 * np.pi
+
         self.data[0, :] = np.cos(n / 10000 + phase)
-        self.data[1, :] = self.data[0, :] / 3
         self.data[2, :] = np.array([i % 2 for i in range(len(self.data[0]))])
+
+        for i in range(len(n)):
+
+            self.data[1, i] = self.data[0,i]/3 + 10*np.sin(np.random.rand(1))
+            if self.data[2,i] ==1:
+                self.data[1, i] += gaussian(self.data[0, i], 0, .1) + 5*np.random.rand(1)
+
         self.newData.emit(self.data)
 
-    def on_error(self, e):
-        self.error.emit(e)
 
+class Binner(Worker):
 
-class Binner(QtCore.QObject):
-    newData = QtCore.pyqtSignal(np.ndarray)
-    error = QtCore.pyqtSignal(OSError)
-
-    def __init__(self, data, bins, multithreading=True):
+    def __init__(self, data, n_points, multithreading=True):
         super().__init__()
         self.data_input = data
-        self.bins = bins
-        self.data_output = np.zeros_like(bins)
+        self.bins = np.linspace(data[0].min(), data[0].max(), n_points)
+        self.data_output = np.zeros_like(self.bins)
         self.multithreading = multithreading
-
-
 
     @QtCore.pyqtSlot()
     def work(self):
@@ -152,13 +164,12 @@ class Binner(QtCore.QObject):
             self.error.emit(e)
         print('data binned: emitting results: {}\nprocessing time: {}'.format(type(self.data_output), time.time() - t0))
         self.newData.emit(self.data_output)
+        self.finished.emit()
 
     def bin_data_multi(self):
-
-
         chunks = os.cpu_count()
         for i in range(os.cpu_count()):
-            chunks = os.cpu_count()-1-i
+            chunks = os.cpu_count() - 1 - i
             try:
                 data_split = np.split(self.data_input, chunks, axis=1)
                 break
@@ -184,13 +195,33 @@ class Binner(QtCore.QObject):
         print('binned data : shape {}'.format(self.data_output.shape))
         self.data_output = binned_signal / normarray
 
-
     def bin_data(self):
-
-        self.data_output = bin_dc(self.data_input,self.bins)
-
+        self.data_output = bin_dc(self.data_input, self.bins)
 
 
+class Projector(Worker):
+
+    def __init__(self, data, n_points,dark_control=True):
+        super().__init__()
+        self.data_input = data
+        self.n_points = n_points
+        self.data_output = np.zeros(n_points)
+        self.dark_control = dark_control
+
+    @QtCore.pyqtSlot()
+    def work(self):
+        t0 = time.time()
+        try:
+            self.project_data()
+        except Exception as e:
+            self.error.emit(e)
+        print('data projected: emitting results: {}\nprocessing time: {}'.format(type(self.data_output),
+                                                                                 time.time() - t0))
+        self.newData.emit(self.data_output)
+        self.finished.emit()
+
+    def project_data(self):
+        x, self.data_output = project_to_time_axis(self.data_input, self.n_points,dark_control=self.dark_control)
 
 
 def main():
@@ -198,4 +229,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    pass

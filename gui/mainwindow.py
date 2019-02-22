@@ -29,12 +29,12 @@ from pyqtgraph.Qt import QtCore, QtGui
 
 from multiprocessing import Pool
 
-from gui.threads import Streamer, Thread, Binner
+from gui.threads import Streamer, Thread, Binner, Projector
 from utilities.data import bin_dc, bin_dc_multi
 
 
 class FastScanMainWindow(QMainWindow):
-    _SIMULATE = False
+    _SIMULATE = True
 
     def __init__(self):
         super(FastScanMainWindow, self).__init__()
@@ -65,13 +65,18 @@ class FastScanMainWindow(QMainWindow):
 
         self.n_samples = int((self.laser_trigger_frequency / self.shaker_frequency) * self.n_periods)
 
-        self.bins = None
-        self.n_bins = 1000
-        self.bin_cutoff = .02
+        self.n_points = 1000
+        self.shaker_amplitude = 100*1e-12
+        self.time_axis = self.make_time_axis()
+        self.signal_averages = []
+        self.current_average = np.zeros_like(self.time_axis)
+
+        self.dark_control = True
+        self.pp_method = Projector # project or bin: these are the accepted methods
 
         self.unprocessed_data = np.zeros((3,0))
 
-        self._binning = False
+        self._processing = False
 
     def setupUi(self):
         central_widget = QWidget(self)
@@ -93,6 +98,10 @@ class FastScanMainWindow(QMainWindow):
 
         self.top_plot_area = pg.PlotWidget(name='top_plot')
         visual_layout.addWidget(self.top_plot_area, 0, 0, 1,1)
+        self.top_plot_area.showAxis('top',True)
+        self.top_plot_area.showAxis('right',True)
+        self.top_plot_area.showGrid(True,True,.2)
+
         self.top_plot = self.top_plot_area.plot()
         self.top_plot.setPen(pg.mkPen(255, 255, 255))
         self.top_plot_area.setLabel('left', 'Value', units='V')
@@ -100,8 +109,14 @@ class FastScanMainWindow(QMainWindow):
 
         self.bot_plot_area = pg.PlotWidget(name='top_plot')
         visual_layout.addWidget(self.bot_plot_area, 1, 0, 1, 1)
+        self.bot_plot_area.showAxis('top',True)
+        self.bot_plot_area.showAxis('right',True)
+        self.bot_plot_area.showGrid(True,True,.2)
+
         self.bot_plot = self.bot_plot_area.plot()
-        self.bot_plot.setPen(pg.mkPen(255, 255, 255))
+        self.bot_plot.setPen(pg.mkPen(100, 100, 100))
+        self.bot_plot_avg = self.bot_plot_area.plot()
+        self.bot_plot_avg.setPen(pg.mkPen(100, 255, 100))
         self.bot_plot_area.setLabel('left', 'Value', units='V')
         self.bot_plot_area.setLabel('bottom', 'Time', units='s')
 
@@ -121,30 +136,9 @@ class FastScanMainWindow(QMainWindow):
 
         control_layout.addItem(verticalSpacer)
 
-
-    def make_bins(self, data, n_bins=1000, cutoff=.02):
-        dmax, dmin = data[0].max(), data[0].min()
-        amp = dmax - dmin
-        dmax -= amp * cutoff
-        dmin += amp * cutoff
-        self.bins = np.linspace(dmin, dmax, n_bins)
-
-    # def set_clock_frequency(self, frequency=2):
-    #     self.main_clock.setInterval(1. / frequency)
-    #
-    # def start_stop_timer(self):
-    #     if self.main_clock_running:
-    #         self.main_clock.stop()
-    #         self.main_clock_running = False
-    #         self.status_bar.showMessage('Main Clock Started')
-    #     else:
-    #         self.main_clock.start()
-    #         self.main_clock_running = True
-    #         self.status_bar.showMessage('Main Clock Stopped')
-    #
-    # def on_timer(self):
-    #     shaker_position, signal, n = self.measure()
-    #     self.draw_top_plot(n, shaker_position)
+    def make_time_axis(self):
+        self.time_axis = np.linspace(-self.shaker_amplitude/2,self.shaker_amplitude/2,self.n_points)
+        return self.time_axis
 
     def start_acquisition(self):
         self.start_button.setEnabled(False)
@@ -152,7 +146,7 @@ class FastScanMainWindow(QMainWindow):
         self.status_bar.showMessage('initializing acquisition')
         self.streamer_thread = Thread()
         self.streamer_thread.stopped.connect(self.kill_streamer_thread)
-        self.streamer = Streamer(self.n_samples)
+        self.streamer = Streamer(self.n_samples,simulate=self._SIMULATE)
         self.streamer.newData[np.ndarray].connect(self.on_streamer_data)
         self.streamer.error.connect(self.raise_thread_error)
         self.streamer.finished.connect(self.on_streamer_finished)
@@ -174,14 +168,12 @@ class FastScanMainWindow(QMainWindow):
     @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, data):
         print('stream data recieved')
-        self.draw_top_plot(np.linspace(0, len(data[0]) - 1, len(data[0])), data[1])
-
+        self.draw_top_plot(np.linspace(0, len(data[0])/self.laser_trigger_frequency, len(data[0])), data[0])
         self.unprocessed_data = np.append(self.unprocessed_data, data, axis=1)
         print(self.unprocessed_data.shape,data.shape)
-        if not self._binning:
-            print('binning data of shape {}'.format(self.unprocessed_data.shape))
-            self.bin_data(self.unprocessed_data)
-            self.unprocessed_data = np.zeros((3,0))
+        self.process_data(data)
+        self.unprocessed_data = np.zeros((3,0))
+
 
     def on_streamer_finished(self):
         print('streamer finished signal recieved')
@@ -191,44 +183,48 @@ class FastScanMainWindow(QMainWindow):
         self.streamer_thread = None
         self.streamer = None
 
-    def bin_data(self, data):
-        self._binning = True
-        if self.bins is None:
-            self.make_bins(data)
-        self.binner_thread = Thread()
-        self.streamer_thread.stopped.connect(self.kill_binner_thread)
-        self.binner = Binner(data,self.bins)
-        self.binner.newData[np.ndarray].connect(self.on_binner_data)
-        self.binner.error.connect(self.raise_thread_error)
-        self.streamer.finished.connect(self.on_binner_finished)
-        self.binner.moveToThread(self.binner_thread)
-        self.binner_thread.started.connect(self.binner.work)
-        self.binner_thread.start()
+    def process_data(self,data):
+        self._processing = True
 
+        self.processor_thread = Thread()
+        self.processor_thread.stopped.connect(self.kill_processor_thread)
+        self.processor = self.pp_method(data,self.n_points,dark_control=self.dark_control)
+        self.processor.newData[np.ndarray].connect(self.on_processor_data)
+        self.processor.error.connect(self.raise_thread_error)
+        self.streamer.finished.connect(self.on_processor_finished)
+        self.processor.moveToThread(self.processor_thread)
+        self.processor_thread.started.connect(self.processor.work)
+        self.processor_thread.start()
 
     @QtCore.pyqtSlot(np.ndarray)
-    def on_binner_data(self, data):
-        self._binning = False
-        self.binner_thread.exit()
-        self.draw_bot_plot(self.bins, data)
+    def on_processor_data(self, data):
+        self._processing = False
+        self.processor_thread.exit()
+        self.signal_averages.append(data)
+        self.draw_bot_plot()
 
-    def on_binner_finished(self):
-        print('streamer finished signal recieved')
 
-    def kill_binner_thread(self):
-        print('binner Thread finished, deleting instance')
+    def on_processor_finished(self):
+        print('Processor finished signal recieved')
+
+    def kill_processor_thread(self):
+        print('processor_thread Thread finished, deleting instance')
         self.binner_thread = None
-        self.binner = None
+        self.processor = None
     #
     def raise_thread_error(self, e):
-        print('Rising error from thread')
-        print(e)
+        print('---Error---\n{}'.format(e))
 
     def draw_top_plot(self, xd, yd):
         self.top_plot.setData(x=xd, y=yd)
 
-    def draw_bot_plot(self,xd,yd):
-        self.bot_plot.setData(x=xd, y=yd)
+    def draw_bot_plot(self):
+        y = self.signal_averages[-1]
+        yavg = np.array(self.signal_averages).mean(axis=0)
+        self.bot_plot.setData(x=self.time_axis[2:-2], y=y[2:-2])
+        self.bot_plot_avg.setData(x=self.time_axis[2:-2], y=yavg[2:-2])
+
+
 
     def closeEvent(self, event):
         # geometry = self.saveGeometry()
