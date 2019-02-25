@@ -19,12 +19,15 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
+import os
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtWidgets import QMainWindow, QRadioButton, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
-    QGroupBox,QLabel
+    QGroupBox,QLabel, QLineEdit
 from PyQt5.QtCore import QTimer
 from pyqtgraph.Qt import QtCore, QtGui
+
+import h5py
 
 import time
 import qdarkstyle
@@ -67,13 +70,14 @@ class FastScanMainWindow(QMainWindow):
                          'n_plot_points':15000
                          }
 
-        self.data = {'raw':None,
-                     'processed':None,
+        self.data = {'processed':None,
                      'unprocessed': np.zeros((3, 0)),
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
                      }
+
+
         self._processing_tick = None
         self._streamer_tick = None
 
@@ -172,8 +176,43 @@ class FastScanMainWindow(QMainWindow):
         self.radio_dark_control.setChecked(True)
         settings_box_layout.addWidget(self.radio_dark_control)
 
+
+        self.save_box = QGroupBox('Save')
+        savebox_layout = QHBoxLayout()
+        self.save_box.setLayout(savebox_layout)
+
+        self.save_name_ledit = QLineEdit('D:/data/fastscan/test01')
+        savebox_layout.addWidget(self.save_name_ledit)
+
+        self.save_data_button = QPushButton('Save')
+        savebox_layout.addWidget(self.save_data_button)
+        self.save_data_button.clicked.connect(self.save_data)
+
         layout.addItem(self.__verticalSpacer)
+        layout.addWidget(self.save_box)
         return widget
+
+    def save_data(self):
+        filename = self.save_name_ledit.text()
+
+        dir = '\\'.join(filename.split('/')[:-1])
+        name = filename.split('/')[-1]
+        if not os.path.isdir(dir):
+            os.mkdir(dir)
+
+        with h5py.File(os.path.join(dir,name+".h5"), "w") as f:
+            data_grp = f.create_group('data')
+            settings_grp = f.create_group('settings')
+
+            for key,val in self.data.items():
+                if val is not None:
+                    print('saving {},{}'.format(key,val))
+                    data_grp.create_dataset(key,data=val)
+            for key,val in self.settings.items():
+                if val is not None:
+                    settings_grp.create_dataset(key,data=val)
+                    print('saving {},{}'.format(key,val))
+
 
     @QtCore.pyqtSlot(int)
     def set_laser_trigger_frequency(self, val):
@@ -317,6 +356,10 @@ class FastScanMainWindow(QMainWindow):
                     self.label_processor_fps.setText('processor: {:.2f} s/frame'.format(1. / dt))
             self._processing_tick = t
             data = self.data['unprocessed']
+            if self.data['processed'] is None:
+                self.data['processed'] = data
+            else:
+                self.data['processed'] = np.append(self.data['processed'], data, axis=1)
             self.data['unprocessed'] = np.zeros((3, 0))
             self.process_data(data)
 
@@ -335,7 +378,6 @@ class FastScanMainWindow(QMainWindow):
     @QtCore.pyqtSlot(np.ndarray)
     def on_processor_data(self, data):
         print('processed data into {}'.format(data.shape))
-
         self._processing = False
         self.processor_thread.exit()
         # self.data['last_trace'] = data

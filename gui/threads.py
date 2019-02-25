@@ -130,14 +130,14 @@ class Streamer(Worker):
         t0 = time.time()
         n = np.arange(len(self.data[0]))
         phase = np.random.rand(1) * 2 * np.pi
-        self.data[0, :] = np.cos(n / 10000 + phase)
+        self.data[0, :] = np.cos(2*np.pi*n / 30000 + phase)
         self.data[2, :] = np.array([i % 2 for i in range(len(self.data[0]))])
         for i in range(len(n)):
             self.data[1, i] = self.data[0,i]/3 + 1*np.sin(np.random.rand(1))
             if self.data[2,i] ==1:
                 self.data[1, i] += gaussian(self.data[0, i], 0, .1) + 1*np.random.rand(1)
         dt = time.time()-t0
-        time.sleep(max(self.n_samples/300000 - dt,0))
+        time.sleep(max(self.n_samples/273000 - dt,0))
         self.newData.emit(self.data)
 
 
