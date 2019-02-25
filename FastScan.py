@@ -34,10 +34,13 @@ def main():
     sys.excepthook = my_exception_hook
 
     app = QCoreApplication.instance()
+
     if app is None:
         app = QApplication(sys.argv)
     # Create handle prg for the Graphic Interface
     prg = FastScanMainWindow()
+
+
     # prg = testwindow()
 
     # print('showing GUI')
@@ -78,7 +81,9 @@ class testwindow(QMainWindow):
         hbox.addWidget(splitter2)
 
         self.setLayout(hbox)
-        # QtGui.QApplication.setStyle(QtGui.QStyleFactory.create('Cleanlooks'))
+
+        QtGui.QApplication.setStyle(QtGui.QStyleFactory.create('Cleanlooks'))
+
 
 
 

@@ -19,22 +19,22 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-import os
 import numpy as np
 import pyqtgraph as pg
+from PyQt5.QtWidgets import QMainWindow, QRadioButton, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
+    QGroupBox,QLabel
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QMainWindow, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
-    QGroupBox, QSpinBox
 from pyqtgraph.Qt import QtCore, QtGui
 
-from multiprocessing import Pool
+import time
+import qdarkstyle
 
-from gui.threads import Streamer, Thread, Binner, Projector
-from utilities.data import bin_dc, bin_dc_multi
+from gui.threads import Streamer, Thread, Projector
+from utilities.qt import SpinBox, labeled_qitem
 
 
 class FastScanMainWindow(QMainWindow):
-    _SIMULATE = False
+    _SIMULATE = True
 
     def __init__(self):
         super(FastScanMainWindow, self).__init__()
@@ -45,38 +45,48 @@ class FastScanMainWindow(QMainWindow):
         self.status_bar.showMessage('ready')
 
         # set the cool dark theme and other plotting settings
-        # self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+        self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
         pg.setConfigOption('background', .1)
         pg.setConfigOption('foreground', .9)
         pg.setConfigOptions(antialias=True)
-        self.setupUi()
+
 
         #########################
         #   define variables    #
         #########################
-        # self.main_clock = QTimer()
-        # self.set_clock_frequency(2)
-        # self.main_clock.timeout.connect(self.on_timer)
-        # self.main_clock_running = False
 
-        self.laser_trigger_frequency = 273000
-        self.shaker_frequency = 10
-        self.n_periods = 10
 
-        self.n_samples = int((self.laser_trigger_frequency / self.shaker_frequency) * self.n_periods)
 
-        self.n_points = 1000
-        self.shaker_amplitude = 100*1e-12
-        self.time_axis = self.make_time_axis()
-        self.signal_averages = []
-        self.current_average = np.zeros_like(self.time_axis)
 
-        self.dark_control = False
-        self.pp_method = Projector # project or bin: these are the accepted methods
 
-        self.unprocessed_data = np.zeros((3,0))
 
+        self.settings = {'laser_trigger_frequency':273000,
+                         'shaker_frequency':10,
+                         'n_samples':100000,
+                         'shaker_amplitude':10,
+                         'n_plot_points':15000
+                         }
+
+        self.data = {'raw':None,
+                     'processed':None,
+                     'unprocessed': np.zeros((3, 0)),
+                     'time_axis': None,
+                     'last_trace': None,
+                     'all_traces': None,
+                     }
+        self._processing_tick = None
+        self._streamer_tick = None
+
+        self.pp_method = Projector  # project or bin: these are the accepted methods
         self._processing = False
+
+
+        self.main_clock = QTimer()
+        self.main_clock.setInterval(1. / 60)
+        self.main_clock.timeout.connect(self.on_main_clock)
+        self.main_clock.start()
+        self.setupUi()
+
 
     def setupUi(self):
         central_widget = QWidget(self)
@@ -84,44 +94,25 @@ class FastScanMainWindow(QMainWindow):
         central_layout = QHBoxLayout()
         central_widget.setLayout(central_layout)
 
-        verticalSpacer = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        self.__verticalSpacer = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
 
-        control_widget = QWidget()
-        central_layout.addWidget(control_widget)
-        control_layout = QVBoxLayout()
-        control_widget.setLayout(control_layout)
+        control_widget = self.make_controlwidget()
+        visual_widget = self.make_visualwidget()
 
-        visual_widget = QWidget()
-        central_layout.addWidget(visual_widget)
-        visual_layout = QGridLayout()
-        visual_widget.setLayout(visual_layout)
+        main_splitter = QtGui.QSplitter(QtCore.Qt.Horizontal)
+        main_splitter.addWidget(control_widget)
+        main_splitter.addWidget(visual_widget)
+        # main_splitter.setStretchFactor(0, 5)
 
-        self.top_plot_area = pg.PlotWidget(name='top_plot')
-        visual_layout.addWidget(self.top_plot_area, 0, 0, 1,1)
-        self.top_plot_area.showAxis('top',True)
-        self.top_plot_area.showAxis('right',True)
-        self.top_plot_area.showGrid(True,True,.2)
+        central_layout.addWidget(main_splitter)
 
-        self.top_plot = self.top_plot_area.plot()
-        self.top_plot.setPen(pg.mkPen(255, 255, 255))
-        self.top_plot_area.setLabel('left', 'Value', units='V')
-        self.top_plot_area.setLabel('bottom', 'Time', units='s')
+    def make_controlwidget(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        widget.setLayout(layout)
 
-        self.bot_plot_area = pg.PlotWidget(name='top_plot')
-        visual_layout.addWidget(self.bot_plot_area, 1, 0, 1, 1)
-        self.bot_plot_area.showAxis('top',True)
-        self.bot_plot_area.showAxis('right',True)
-        self.bot_plot_area.showGrid(True,True,.2)
-
-        self.bot_plot = self.bot_plot_area.plot()
-        self.bot_plot.setPen(pg.mkPen(100, 100, 100))
-        self.bot_plot_avg = self.bot_plot_area.plot()
-        self.bot_plot_avg.setPen(pg.mkPen(100, 255, 100))
-        self.bot_plot_area.setLabel('left', 'Value', units='V')
-        self.bot_plot_area.setLabel('bottom', 'Time', units='s')
-
-        box_cont = QGroupBox('continuous acquisition')
-        control_layout.addWidget(box_cont)
+        box_cont = QGroupBox('Acquisition')
+        layout.addWidget(box_cont)
         box_cont_layout = QGridLayout()
         box_cont.setLayout(box_cont_layout)
 
@@ -133,12 +124,137 @@ class FastScanMainWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_acquisition)
         self.stop_button.setEnabled(False)
 
+        self.reset_button = QPushButton('reset')
+        box_cont_layout.addWidget(self.reset_button, 1, 1, 1, 1)
+        self.reset_button.clicked.connect(self.reset_data)
+        self.reset_button.setEnabled(True)
 
-        control_layout.addItem(verticalSpacer)
+        settings_box = QGroupBox('settings')
+        layout.addWidget(settings_box)
+        settings_box_layout = QGridLayout()
+        settings_box.setLayout(settings_box_layout)
 
+        settings_items = []
+
+        self.spinbox_laser_trigger_frequency = SpinBox(
+            name='Trigger Frequency', layout_list=settings_items,
+            type=int, value=self.settings['laser_trigger_frequency'], max='max', step=1, suffix='Hz')
+        self.spinbox_laser_trigger_frequency.valueChanged.connect(self.set_laser_trigger_frequency)
+
+        self.spinbox_shaker_frequency = SpinBox(
+            name='Shaker Frequency', layout_list=settings_items, type=float,
+            value=self.settings['shaker_frequency'], max=20, step=.01, suffix='Hz')
+        self.spinbox_shaker_frequency.valueChanged.connect(self.set_shaker_frequency)
+
+        self.spinbox_n_samples = SpinBox(
+            name='samples', layout_list=settings_items,
+            type=int, value=self.settings['n_samples'], step=1, max='max')
+        self.spinbox_n_samples.valueChanged.connect(self.set_n_samples)
+
+        self.spinbox_shaker_amplitude = SpinBox(
+            name='Shaker Amplitude', layout_list=settings_items,
+            type=float, value=self.settings['shaker_amplitude'], step=.01, suffix='ps')
+        self.spinbox_shaker_amplitude.valueChanged.connect(self.set_shaker_amplitude)
+
+        self.spinbox_n_plot_points = SpinBox(
+            name='Plot points', layout_list=settings_items,
+            type=int, value=self.settings['n_plot_points'], step=1, max='max')
+        self.spinbox_n_plot_points.valueChanged.connect(self.set_n_plot_points)
+
+
+        for item in settings_items:
+            settings_box_layout.addWidget(labeled_qitem(*item))
+        self.label_processor_fps = QLabel('FPS: 0')
+        settings_box_layout.addWidget(self.label_processor_fps)
+        self.label_streamer_fps = QLabel('FPS: 0')
+        settings_box_layout.addWidget(self.label_streamer_fps)
+        self.radio_dark_control = QRadioButton('Dark Control')
+        self.radio_dark_control.setChecked(True)
+        settings_box_layout.addWidget(self.radio_dark_control)
+
+        layout.addItem(self.__verticalSpacer)
+        return widget
+
+    @QtCore.pyqtSlot(int)
+    def set_laser_trigger_frequency(self, val):
+        self.settings['laser_trigger_frequency'] = val
+
+    @QtCore.pyqtSlot(float)
+    def set_shaker_frequency(self, val):
+        self.settings['shaker_frequency'] = val
+
+    @QtCore.pyqtSlot(int)
+    def set_n_samples(self, val):
+        self.settings['n_samples'] = val
+
+    @QtCore.pyqtSlot(float)
+    def set_shaker_amplitude(self, val):
+        self.settings['shaker_amplitude'] = val
+
+    @QtCore.pyqtSlot(int)
+    def set_n_plot_points(self, val):
+        self.settings['n_plot_points'] = val
+
+    @property
+    def dark_control(self):
+        return self.radio_dark_control.isChecked()
+
+    @property
+    def time_axis(self):
+        return self.data['time_axis']
+
+    def make_visualwidget(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        widget.setLayout(layout)
+
+        self.main_plot_widget = pg.PlotWidget(name='raw_data_plot')
+        self.setup_plot_widget(self.main_plot_widget, title='Signal')
+        self.main_plot_widget.setMinimumHeight(450)
+
+        self.plot_back_line = self.main_plot_widget.plot()
+        self.plot_back_line.setPen(pg.mkPen(100, 100, 100))
+        self.plot_front_line = self.main_plot_widget.plot()
+        self.plot_front_line.setPen(pg.mkPen(100, 255, 100))
+
+        self.secondary_plot_widget = pg.PlotWidget(name='raw_data_plot')
+        self.setup_plot_widget(self.secondary_plot_widget, title='raw data stream')
+
+        self.raw_data_plot = self.secondary_plot_widget.plot()
+        self.raw_data_plot.setPen(pg.mkPen(255, 255, 255))
+
+        vsplitter = QtGui.QSplitter(QtCore.Qt.Vertical)
+        vsplitter.addWidget(self.main_plot_widget)
+        vsplitter.addWidget(self.secondary_plot_widget)
+
+        # vsplitter.setStretchFactor(0, 5)
+        layout.addWidget(vsplitter)
+
+        return widget
+
+    def setup_plot_widget(self, plot_widget, title='Plot'):
+        plot_widget.showAxis('top', True)
+        plot_widget.showAxis('right', True)
+        plot_widget.showGrid(True, True, .2)
+        plot_widget.setLabel('left', 'Value', units='V')
+        plot_widget.setLabel('bottom', 'Time', units='s')
+        plot_widget.setLabel('top', title)
+
+    @QtCore.pyqtSlot()
+    def reset_data(self):
+
+        self.data = {'raw':None,
+                     'processed':None,
+                     'unprocessed': np.zeros((3, 0)),
+                     'time_axis': None,
+                     'last_trace': None,
+                     'all_traces': None,
+                     }
     def make_time_axis(self):
-        self.time_axis = np.linspace(-self.shaker_amplitude/2,self.shaker_amplitude/2,self.n_points)
-        return self.time_axis
+        amp = self.settings['shaker_amplitude']
+        n_pts = self.settings['n_plot_points']
+        self.data['time_axis'] = np.linspace(-amp,amp,self.settings['n_plot_points'])
+        return self.data['time_axis']
 
     def start_acquisition(self):
         self.start_button.setEnabled(False)
@@ -146,12 +262,15 @@ class FastScanMainWindow(QMainWindow):
         self.status_bar.showMessage('initializing acquisition')
         self.streamer_thread = Thread()
         self.streamer_thread.stopped.connect(self.kill_streamer_thread)
-        self.streamer = Streamer(self.n_samples,simulate=self._SIMULATE)
+
+        self.streamer = Streamer(self.settings['n_samples'], simulate=self._SIMULATE)
         self.streamer.newData[np.ndarray].connect(self.on_streamer_data)
         self.streamer.error.connect(self.raise_thread_error)
         self.streamer.finished.connect(self.on_streamer_finished)
+
         self.streamer.moveToThread(self.streamer_thread)
         self.streamer_thread.started.connect(self.streamer.start_acquisition)
+
         self.streamer_thread.start()
         self.status_bar.showMessage('Acquisition running')
         self.stop_button.setEnabled(True)
@@ -167,13 +286,17 @@ class FastScanMainWindow(QMainWindow):
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, data):
-        print('stream data recieved')
-        self.draw_top_plot(np.linspace(0, len(data[0])/self.laser_trigger_frequency, len(data[0])), data[0])
-        self.unprocessed_data = np.append(self.unprocessed_data, data, axis=1)
-        print(self.unprocessed_data.shape,data.shape)
-        self.process_data(data)
-        self.unprocessed_data = np.zeros((3,0))
-
+        print('stream data recieved: {} pts'.format(data.shape))
+        t = time.time()
+        if self._streamer_tick is not None:
+            dt = 1. / (t - self._streamer_tick)
+            if dt > 1:
+                self.label_streamer_fps.setText('streamer: {:.2f} frame/s'.format(dt))
+            else:
+                self.label_streamer_fps.setText('streamer: {:.2f} s/frame'.format(1. / dt))
+        self._streamer_tick = t
+        self.data['unprocessed'] = np.append(self.data['unprocessed'], data, axis=1)
+        self.draw_raw_signal_plot(np.linspace(0, len(data[0]) / self.settings['laser_trigger_frequency'], len(data[0])), data[0])
 
     def on_streamer_finished(self):
         print('streamer finished signal recieved')
@@ -183,26 +306,43 @@ class FastScanMainWindow(QMainWindow):
         self.streamer_thread = None
         self.streamer = None
 
-    def process_data(self,data):
-        self._processing = True
+    def on_main_clock(self):
+        if not self._processing and self.data['unprocessed'].shape[1]>0:
+            t=time.time()
+            if self._processing_tick is not None:
+                dt = 1./(t-self._processing_tick)
+                if dt>1:
+                    self.label_processor_fps.setText('processor: {:.2f} frame/s'.format(dt))
+                else:
+                    self.label_processor_fps.setText('processor: {:.2f} s/frame'.format(1. / dt))
+            self._processing_tick = t
+            data = self.data['unprocessed']
+            self.data['unprocessed'] = np.zeros((3, 0))
+            self.process_data(data)
 
+    def process_data(self, data):
+        self._processing = True
         self.processor_thread = Thread()
         self.processor_thread.stopped.connect(self.kill_processor_thread)
-        self.processor = self.pp_method(data,self.n_points,dark_control=self.dark_control)
+        self.processor = self.pp_method(data, self.settings['n_plot_points'], dark_control=self.dark_control)
         self.processor.newData[np.ndarray].connect(self.on_processor_data)
         self.processor.error.connect(self.raise_thread_error)
-        self.streamer.finished.connect(self.on_processor_finished)
+        self.processor.finished.connect(self.on_processor_finished)
         self.processor.moveToThread(self.processor_thread)
         self.processor_thread.started.connect(self.processor.work)
         self.processor_thread.start()
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_processor_data(self, data):
+        print('processed data into {}'.format(data.shape))
+
         self._processing = False
         self.processor_thread.exit()
-        self.signal_averages.append(data)
-        self.draw_bot_plot()
-
+        # self.data['last_trace'] = data
+        if self.data['all_traces'] is None:
+            self.data['all_traces'] = []
+        self.data['all_traces'].append(data)
+        self.draw_main_plot()
 
     def on_processor_finished(self):
         print('Processor finished signal recieved')
@@ -211,20 +351,23 @@ class FastScanMainWindow(QMainWindow):
         print('processor_thread Thread finished, deleting instance')
         self.binner_thread = None
         self.processor = None
-    #
+
     def raise_thread_error(self, e):
         print('---Error---\n{}'.format(e))
 
-    def draw_top_plot(self, xd, yd):
-        self.top_plot.setData(x=xd, y=yd)
+    def draw_raw_signal_plot(self, xd, yd):
+        self.raw_data_plot.setData(x=xd, y=yd)
 
-    def draw_bot_plot(self):
-        y = self.signal_averages[-1]
-        yavg = np.array(self.signal_averages).mean(axis=0)
-        self.bot_plot.setData(x=self.time_axis[2:-2], y=y[2:-2])
-        self.bot_plot_avg.setData(x=self.time_axis[2:-2], y=yavg[2:-2])
-
-
+    def draw_main_plot(self):
+        if self.data['time_axis']is None:
+            self.make_time_axis()
+        x = self.data['time_axis']
+        y = self.data['all_traces'][-1]
+        print(len(x))
+        print(len(y))
+        yavg = np.array(self.data['all_traces']).mean(axis=0)
+        self.plot_back_line.setData(x=x[2:-2], y=y[2:-2])
+        self.plot_front_line.setData(x=x[2:-2], y=yavg[2:-2])
 
     def closeEvent(self, event):
         # geometry = self.saveGeometry()

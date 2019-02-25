@@ -20,8 +20,10 @@
 
 """
 import sys
+
 from PyQt5 import uic
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel, QWidget
+
 
 def raise_Qerror(doingWhat, errorHandle, type='Warning', popup=True):
     """ opens a dialog window showing the error"""
@@ -37,6 +39,7 @@ def raise_Qerror(doingWhat, errorHandle, type='Warning', popup=True):
         errorDialog.setStandardButtons(QMessageBox.Ok)
         errorDialog.exec_()
 
+
 def my_exception_hook(exctype, value, traceback):
     # Print the error and traceback
     print(exctype, value, traceback)
@@ -44,14 +47,46 @@ def my_exception_hook(exctype, value, traceback):
     sys._excepthook(exctype, value, traceback)
     sys.exit(1)
 
+
 def recompile(folder):
     print('recompiling')
     uic.compileUiDir(folder, execute=True)
     print('done')
 
+
+def SpinBox(name=None,type=int, value=None, step=None, max=None, min=None, suffix=None,layout_list=None):
+    if type == int:
+        spinbox = QSpinBox()
+    if type == float:
+        spinbox = QDoubleSpinBox()
+    if max is not None:
+        if max == 'max':
+            spinbox.setMaximum(2147483647)
+        else:
+            spinbox.setMaximum(max)
+    if min is not None:
+        if max == 'max':
+            spinbox.setMinimum(-2147483647)
+        else:
+            spinbox.setMinimum(min)
+    if value is not None: spinbox.setValue(value)
+    if suffix is not None: spinbox.setSuffix(' {}'.format(suffix))
+    if step is not None: spinbox.setSingleStep(step)
+    if layout_list is not None: layout_list.append((name,spinbox))
+    return spinbox
+
+
+def labeled_qitem(label, qitem):
+    w = QWidget()
+    l = QHBoxLayout()
+    w.setLayout(l)
+    l.addWidget(QLabel(label))
+    l.addWidget(qitem)
+    return w
+
+
 def main():
     pass
-
 
 
 if __name__ == '__main__':
