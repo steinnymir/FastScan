@@ -20,19 +20,22 @@
 
 """
 import os
-import numpy as np
-import pyqtgraph as pg
-from PyQt5.QtWidgets import QMainWindow, QRadioButton, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
-    QGroupBox,QLabel, QLineEdit
-from PyQt5.QtCore import QTimer
-from pyqtgraph.Qt import QtCore, QtGui
+import time
 
 import h5py
-
-import time
+import numpy as np
+import pyqtgraph as pg
 import qdarkstyle
+from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QMainWindow, QRadioButton, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton, \
+    QGroupBox, QLabel, QLineEdit
+from pyqtgraph.Qt import QtCore, QtGui
 
-from gui.threads import Streamer, Thread, Projector
+from gui.threads import Streamer, Thread, Projector, Fitter
+
+from utilities.data import fit_peak
+from utilities.math import gaussian_fwhm, sech2_fwhm
 from utilities.qt import SpinBox, labeled_qitem
 
 
@@ -46,51 +49,43 @@ class FastScanMainWindow(QMainWindow):
 
         self.status_bar = self.statusBar()
         self.status_bar.showMessage('ready')
-
         # set the cool dark theme and other plotting settings
         self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
-        pg.setConfigOption('background', .1)
-        pg.setConfigOption('foreground', .9)
+        pg.setConfigOption('background', (25, 35, 45))
+        pg.setConfigOption('foreground', 'w')
         pg.setConfigOptions(antialias=True)
-
 
         #########################
         #   define variables    #
         #########################
 
-
-
-
-
-
-        self.settings = {'laser_trigger_frequency':273000,
-                         'shaker_frequency':10,
-                         'n_samples':100000,
-                         'shaker_amplitude':10,
-                         'n_plot_points':15000
+        self.settings = {'laser_trigger_frequency': 273000,
+                         'shaker_frequency': 10,
+                         'n_samples': 100000,
+                         'shaker_amplitude': 10,
+                         'n_plot_points': 15000
                          }
-
-        self.data = {'processed':None,
+        self.data = {'processed': None,
                      'unprocessed': np.zeros((3, 0)),
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
                      }
 
-
         self._processing_tick = None
         self._streamer_tick = None
 
+        self.peak_fit_parameters = None
+        self.peak_fit_data = None
+
         self.pp_method = Projector  # project or bin: these are the accepted methods
         self._processing = False
-
 
         self.main_clock = QTimer()
         self.main_clock.setInterval(1. / 60)
         self.main_clock.timeout.connect(self.on_main_clock)
         self.main_clock.start()
         self.setupUi()
-
 
     def setupUi(self):
         central_widget = QWidget(self)
@@ -115,24 +110,31 @@ class FastScanMainWindow(QMainWindow):
         layout = QVBoxLayout()
         widget.setLayout(layout)
 
-        box_cont = QGroupBox('Acquisition')
-        layout.addWidget(box_cont)
-        box_cont_layout = QGridLayout()
-        box_cont.setLayout(box_cont_layout)
+        # ----------------------------------------------------------------------
+        # Settings Box
+        # ----------------------------------------------------------------------
+
+        aquisition_box = QGroupBox('Acquisition')
+        layout.addWidget(aquisition_box)
+        aquisition_box_layout = QGridLayout()
+        aquisition_box.setLayout(aquisition_box_layout)
 
         self.start_button = QPushButton('start')
-        box_cont_layout.addWidget(self.start_button, 0, 0, 1, 1)
+        aquisition_box_layout.addWidget(self.start_button, 0, 0, 1, 1)
         self.start_button.clicked.connect(self.start_acquisition)
         self.stop_button = QPushButton('stop')
-        box_cont_layout.addWidget(self.stop_button, 0, 1, 1, 1)
+        aquisition_box_layout.addWidget(self.stop_button, 0, 1, 1, 1)
         self.stop_button.clicked.connect(self.stop_acquisition)
         self.stop_button.setEnabled(False)
 
         self.reset_button = QPushButton('reset')
-        box_cont_layout.addWidget(self.reset_button, 1, 1, 1, 1)
+        aquisition_box_layout.addWidget(self.reset_button, 1, 1, 1, 1)
         self.reset_button.clicked.connect(self.reset_data)
         self.reset_button.setEnabled(True)
 
+        # ----------------------------------------------------------------------
+        # Settings Box
+        # ----------------------------------------------------------------------
         settings_box = QGroupBox('settings')
         layout.addWidget(settings_box)
         settings_box_layout = QGridLayout()
@@ -165,7 +167,6 @@ class FastScanMainWindow(QMainWindow):
             type=int, value=self.settings['n_plot_points'], step=1, max='max')
         self.spinbox_n_plot_points.valueChanged.connect(self.set_n_plot_points)
 
-
         for item in settings_items:
             settings_box_layout.addWidget(labeled_qitem(*item))
         self.label_processor_fps = QLabel('FPS: 0')
@@ -176,20 +177,83 @@ class FastScanMainWindow(QMainWindow):
         self.radio_dark_control.setChecked(True)
         settings_box_layout.addWidget(self.radio_dark_control)
 
+        # ----------------------------------------------------------------------
+        # Autocorrelation Box
+        # ----------------------------------------------------------------------
 
-        self.save_box = QGroupBox('Save')
+        autocorrelation_box = QGroupBox('Autocorrelation')
+        autocorrelation_box_layout = QGridLayout()
+        autocorrelation_box.setLayout(autocorrelation_box_layout)
+
+        self.fit_off_checkbox = QRadioButton('Off')
+        autocorrelation_box_layout.addWidget(self.fit_off_checkbox, 0, 0, 1, 1)
+        self.fit_gauss_checkbox = QRadioButton('Gaussian')
+        autocorrelation_box_layout.addWidget(self.fit_gauss_checkbox, 0, 1, 1, 1)
+        self.fit_sech2_checkbox = QRadioButton('Sech2')
+        autocorrelation_box_layout.addWidget(self.fit_sech2_checkbox, 0, 2, 1, 1)
+
+        self.fit_off_checkbox.setChecked(True)
+
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(16)
+        self.fit_report_label = QLabel('Fit parameters:\n')
+        autocorrelation_box_layout.addWidget(self.fit_report_label, 2, 0)
+        self.pulse_duration_label = QLabel('0 fs')
+
+        self.pulse_duration_label.setFont(font)
+
+        autocorrelation_box_layout.addWidget(QLabel('Pulse duration:'), 3, 0)
+        autocorrelation_box_layout.addWidget(self.pulse_duration_label, 3, 1)
+
+        layout.addWidget(autocorrelation_box)
+        # layout.addItem(self.__verticalSpacer)
+
+        # ----------------------------------------------------------------------
+        # Save Box
+        # ----------------------------------------------------------------------
+
+        save_box = QGroupBox('Save')
         savebox_layout = QHBoxLayout()
-        self.save_box.setLayout(savebox_layout)
-
+        save_box.setLayout(savebox_layout)
         self.save_name_ledit = QLineEdit('D:/data/fastscan/test01')
         savebox_layout.addWidget(self.save_name_ledit)
-
         self.save_data_button = QPushButton('Save')
         savebox_layout.addWidget(self.save_data_button)
         self.save_data_button.clicked.connect(self.save_data)
+        layout.addWidget(save_box)
 
-        layout.addItem(self.__verticalSpacer)
-        layout.addWidget(self.save_box)
+        return widget
+
+    def make_visualwidget(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        widget.setLayout(layout)
+
+        self.main_plot_widget = pg.PlotWidget(name='raw_data_plot')
+        self.setup_plot_widget(self.main_plot_widget, title='Signal')
+        self.main_plot_widget.setMinimumHeight(450)
+
+        self.plot_back_line = self.main_plot_widget.plot()
+        self.plot_back_line.setPen(pg.mkPen(100, 100, 100))
+        self.plot_front_line = self.main_plot_widget.plot()
+        self.plot_front_line.setPen(pg.mkPen(100, 255, 100))
+        self.plot_fit_line = self.main_plot_widget.plot()
+        self.plot_fit_line.setPen(pg.mkPen(247, 211, 7))
+
+        self.secondary_plot_widget = pg.PlotWidget(name='raw_data_plot')
+        self.setup_plot_widget(self.secondary_plot_widget, title='raw data stream')
+
+        self.raw_data_plot = self.secondary_plot_widget.plot()
+        self.raw_data_plot.setPen(pg.mkPen(255, 255, 255))
+
+        vsplitter = QtGui.QSplitter(QtCore.Qt.Vertical)
+        vsplitter.addWidget(self.main_plot_widget)
+        vsplitter.addWidget(self.secondary_plot_widget)
+
+        # vsplitter.setStretchFactor(0, 5)
+        layout.addWidget(vsplitter)
+
         return widget
 
     def save_data(self):
@@ -200,19 +264,18 @@ class FastScanMainWindow(QMainWindow):
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
-        with h5py.File(os.path.join(dir,name+".h5"), "w") as f:
+        with h5py.File(os.path.join(dir, name + ".h5"), "w") as f:
             data_grp = f.create_group('data')
             settings_grp = f.create_group('settings')
 
-            for key,val in self.data.items():
+            for key, val in self.data.items():
                 if val is not None:
-                    print('saving {},{}'.format(key,val))
-                    data_grp.create_dataset(key,data=val)
-            for key,val in self.settings.items():
+                    print('saving {},{}'.format(key, val))
+                    data_grp.create_dataset(key, data=val)
+            for key, val in self.settings.items():
                 if val is not None:
-                    settings_grp.create_dataset(key,data=val)
-                    print('saving {},{}'.format(key,val))
-
+                    settings_grp.create_dataset(key, data=val)
+                    print('saving {},{}'.format(key, val))
 
     @QtCore.pyqtSlot(int)
     def set_laser_trigger_frequency(self, val):
@@ -242,35 +305,6 @@ class FastScanMainWindow(QMainWindow):
     def time_axis(self):
         return self.data['time_axis']
 
-    def make_visualwidget(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        widget.setLayout(layout)
-
-        self.main_plot_widget = pg.PlotWidget(name='raw_data_plot')
-        self.setup_plot_widget(self.main_plot_widget, title='Signal')
-        self.main_plot_widget.setMinimumHeight(450)
-
-        self.plot_back_line = self.main_plot_widget.plot()
-        self.plot_back_line.setPen(pg.mkPen(100, 100, 100))
-        self.plot_front_line = self.main_plot_widget.plot()
-        self.plot_front_line.setPen(pg.mkPen(100, 255, 100))
-
-        self.secondary_plot_widget = pg.PlotWidget(name='raw_data_plot')
-        self.setup_plot_widget(self.secondary_plot_widget, title='raw data stream')
-
-        self.raw_data_plot = self.secondary_plot_widget.plot()
-        self.raw_data_plot.setPen(pg.mkPen(255, 255, 255))
-
-        vsplitter = QtGui.QSplitter(QtCore.Qt.Vertical)
-        vsplitter.addWidget(self.main_plot_widget)
-        vsplitter.addWidget(self.secondary_plot_widget)
-
-        # vsplitter.setStretchFactor(0, 5)
-        layout.addWidget(vsplitter)
-
-        return widget
-
     def setup_plot_widget(self, plot_widget, title='Plot'):
         plot_widget.showAxis('top', True)
         plot_widget.showAxis('right', True)
@@ -282,17 +316,18 @@ class FastScanMainWindow(QMainWindow):
     @QtCore.pyqtSlot()
     def reset_data(self):
 
-        self.data = {'raw':None,
-                     'processed':None,
+        self.data = {'raw': None,
+                     'processed': None,
                      'unprocessed': np.zeros((3, 0)),
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
                      }
+
     def make_time_axis(self):
         amp = self.settings['shaker_amplitude']
         n_pts = self.settings['n_plot_points']
-        self.data['time_axis'] = np.linspace(-amp,amp,self.settings['n_plot_points'])
+        self.data['time_axis'] = np.linspace(-amp, amp, self.settings['n_plot_points'])
         return self.data['time_axis']
 
     def start_acquisition(self):
@@ -335,7 +370,8 @@ class FastScanMainWindow(QMainWindow):
                 self.label_streamer_fps.setText('streamer: {:.2f} s/frame'.format(1. / dt))
         self._streamer_tick = t
         self.data['unprocessed'] = np.append(self.data['unprocessed'], data, axis=1)
-        self.draw_raw_signal_plot(np.linspace(0, len(data[0]) / self.settings['laser_trigger_frequency'], len(data[0])), data[0])
+        self.draw_raw_signal_plot(np.linspace(0, len(data[0]) / self.settings['laser_trigger_frequency'], len(data[0])),
+                                  data[0])
 
     def on_streamer_finished(self):
         print('streamer finished signal recieved')
@@ -346,11 +382,11 @@ class FastScanMainWindow(QMainWindow):
         self.streamer = None
 
     def on_main_clock(self):
-        if not self._processing and self.data['unprocessed'].shape[1]>0:
-            t=time.time()
+        if not self._processing and self.data['unprocessed'].shape[1] > 0:
+            t = time.time()
             if self._processing_tick is not None:
-                dt = 1./(t-self._processing_tick)
-                if dt>1:
+                dt = 1. / (t - self._processing_tick)
+                if dt > 1:
                     self.label_processor_fps.setText('processor: {:.2f} frame/s'.format(dt))
                 else:
                     self.label_processor_fps.setText('processor: {:.2f} s/frame'.format(1. / dt))
@@ -384,15 +420,55 @@ class FastScanMainWindow(QMainWindow):
         if self.data['all_traces'] is None:
             self.data['all_traces'] = []
         self.data['all_traces'].append(data)
+        self.current_average = np.nanmean(np.array(self.data['all_traces']), axis=0)
+
         self.draw_main_plot()
+        if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
+            self.fit_data(self.current_average)
 
     def on_processor_finished(self):
         print('Processor finished signal recieved')
 
     def kill_processor_thread(self):
         print('processor_thread Thread finished, deleting instance')
-        self.binner_thread = None
+        self.processor_thread = None
         self.processor = None
+
+    def fit_data(self, data):
+
+        self.fitter_thread = Thread()
+        self.fitter_thread.stopped.connect(self.kill_fitter_thread)
+        self.fitter = Fitter(self.time_axis,data)
+        self.fitter.newData[np.ndarray].connect(self.on_fitter_data)
+        self.fitter.error.connect(self.raise_thread_error)
+        self.fitter.finished.connect(self.on_fitter_finished)
+        self.fitter.moveToThread(self.fitter_thread)
+        self.fitter_thread.started.connect(self.fitter.work)
+        self.fitter_thread.start()
+
+    @QtCore.pyqtSlot(np.ndarray)
+    def on_fitter_data(self, popt):
+        if popt is not None:
+            self.peak_fit_parameters = popt
+            if self.fit_sech2_checkbox.isChecked():
+                model = sech2_fwhm
+            elif self.fit_gauss_checkbox.isChecked():
+                model = gaussian_fwhm
+            else:
+                model = None
+            if model is not None:
+                self.peak_fit_data = model(self.time_axis,*popt)
+                self.plot_fit_line.setData(x=self.time_axis[2:-2], y=self.peak_fit_data[2:-2])
+                self.fit_report_label.setText('Parameters:\nA: {} x0: {} FWHM: {}, c: {}'.format(*popt))
+                self.pulse_duration_label.setText('{} fs'.format(popt[2]*1e15))
+
+    def on_fitter_finished(self):
+        print('Fitter finished signal recieved')
+
+    def kill_fitter_thread(self):
+        print('fitter_thread Thread finished, deleting instance')
+        self.fitter_thread = None
+        self.fitter = None
 
     def raise_thread_error(self, e):
         print('---Error---\n{}'.format(e))
@@ -401,15 +477,21 @@ class FastScanMainWindow(QMainWindow):
         self.raw_data_plot.setData(x=xd, y=yd)
 
     def draw_main_plot(self):
-        if self.data['time_axis']is None:
+        if self.data['time_axis'] is None:
             self.make_time_axis()
         x = self.data['time_axis']
         y = self.data['all_traces'][-1]
+
         print(len(x))
         print(len(y))
-        yavg = np.array(self.data['all_traces']).mean(axis=0)
+        # yavg = np.array(self.data['all_traces']).mean(axis=0)
+        yavg = self.current_average
         self.plot_back_line.setData(x=x[2:-2], y=y[2:-2])
         self.plot_front_line.setData(x=x[2:-2], y=yavg[2:-2])
+        if self.peak_fit_data is not None:
+            if self.fit_sech2_checkbox.isChecked() or self.fit_gauss_checkbox.isChecked():
+                yfit = self.peak_fit_data
+                self.plot_fit_line.setData(x=x[2:-2], y=yfit[2:-2])
 
     def closeEvent(self, event):
         # geometry = self.saveGeometry()

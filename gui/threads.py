@@ -24,6 +24,8 @@ import os, sys
 import time
 from multiprocessing import Pool
 
+from scipy.optimize import curve_fit
+
 import nidaqmx
 import numpy as np
 from PyQt5 import QtCore
@@ -31,7 +33,7 @@ from nidaqmx import stream_readers
 from nidaqmx.constants import Edge, AcquisitionType
 
 from utilities.data import bin_dc_multi, bin_dc, project_to_time_axis
-from utilities.math import gaussian
+from utilities.math import gaussian, gaussian_fwhm, sech2_fwhm
 
 
 class Thread(QtCore.QThread):
@@ -220,6 +222,39 @@ class Projector(Worker):
 
     def project_data(self):
         x, self.data_output = project_to_time_axis(self.data_input, self.n_points,dark_control=self.dark_control)
+
+class Fitter(Worker):
+
+    def __init__(self, x,y,model='sech2',guess=None):
+        super().__init__()
+        self.x = x
+        self.y = y
+        if model == 'sech2':
+            self.model = sech2_fwhm
+        elif model in 'gaussian':
+            self.model = gaussian_fwhm
+        if guess is None:
+            A = max(self.y)
+            x0 = x[y.argmax()]
+            fwhm = 1e-13
+            offset = y[~np.isnan(y)].mean()
+            self.guess = (A,x0,fwhm,offset)
+        else:
+            self.guess = guess
+
+    @QtCore.pyqtSlot()
+    def work(self):
+        t0 = time.time()
+        try:
+            self.popt, pcov = curve_fit(self.model, self.x[np.isfinite(self.y)], self.y[np.isfinite(self.y)], p0=self.guess)
+            self.newData.emit(self.popt)
+
+        except Exception as e:
+            self.error.emit(e)
+            self.newData.emit(self.popt)
+
+        self.finished.emit()
+
 
 
 def main():

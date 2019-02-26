@@ -21,8 +21,16 @@
 """
 import numpy as np
 
-def gaussian(x, mu, sig):
-    return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+def gaussian(x, x0, sig):
+    return np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.)))
+
+def sech2_fwhm(x, A, x0, fwhm,c):
+    tau = fwhm*2/1.76
+    return A / (np.cosh((x-x0)/tau))**2+c
+
+def gaussian_fwhm(x, A,x0, fwhm,c):
+    sig = fwhm*2/2.355
+    return A*np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.)))+c
 
 def sin(x,A,f,p):
     return A* np.sin(x/f + p)

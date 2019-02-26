@@ -21,8 +21,9 @@
 """
 import os
 import numpy as np
+from scipy.optimize import curve_fit
 from multiprocessing import Pool
-
+from utilities.math import gaussian_fwhm, sech2_fwhm
 def bin_dc(data,bins):
     binned_signal = np.zeros_like(bins)
     normarray = np.zeros_like(bins)
@@ -84,6 +85,16 @@ def project_to_time_axis(data,n_points,dark_control=True):
     norm_res = result/normarray
     x_axis = np.linspace(minpos,maxpos,n_points)
     return x_axis, norm_res
+
+def fit_peak(x,y,model='sech2',guess=(1,0,1e-13,.1)):
+    if model == 'sech2':
+        f = sech2_fwhm
+    elif model == 'gauss':
+        f = gaussian_fwhm
+    print('guess: {}'.format(guess))
+    popt,pcov = curve_fit(f, x,y, p0=guess)
+    yf = f(x,*popt)
+    return yf, popt
 
 def main():
     pass
