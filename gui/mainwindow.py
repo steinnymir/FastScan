@@ -22,6 +22,8 @@
 import os
 import time
 
+import pandas as pd
+
 import h5py
 import numpy as np
 import pyqtgraph as pg
@@ -70,6 +72,8 @@ class FastScanMainWindow(QMainWindow):
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
+                     'df_traces':None,
+                     'df_averages':None
                      }
 
         self._processing_tick = None
@@ -417,15 +421,20 @@ class FastScanMainWindow(QMainWindow):
         self._processing = False
         self.processor_thread.exit()
         #draw data on plot
+        time_axis = data[0]
+        signal = data[1]
+        signal_df = pd.DataFrame(data=signal,index=time_axis)
 
-        # self.plot_back_line.setData(x=x[2:-2], y=data[2:-2])
+        self.data['last_trace'] = signal_df
+        if self.data['df_traces'] is None:
+            self.data['df_traces'] = pd.DataFrame(data=signal,index=time_axis)
+            self.data['df_averages'] = self.data['df_traces']
 
-        #
-        self.data['last_trace'] = data
-        if self.data['all_traces'] is None:
-            self.data['all_traces'] = []
-        self.data['all_traces'].append(data)
-        self.current_average = np.nanmean(np.array(self.data['all_traces']), axis=0)
+        else:
+            signal_df = pd.DataFrame(data=signal, index=time_axis)
+            self.data['df_traces'] = pd.concat([self.data['df_traces'],signal_df],axis=1)
+            self.data['df_averages'] = self.data['df_traces'].mean(axis=1)
+
 
         self.draw_main_plot()
         if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
@@ -486,17 +495,20 @@ class FastScanMainWindow(QMainWindow):
         self.raw_data_plot.setData(x=xd, y=yd)
 
     def draw_main_plot(self):
-        if self.data['time_axis'] is None:
-            self.make_time_axis()
-        y = self.data['all_traces'][-1]
-        x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
+        # if self.data['time_axis'] is None:
+        #     self.make_time_axis()
+        # y = self.data['all_traces'][-1]
+        # x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
 
-        print(len(x))
-        print(len(y))
+        current = self.data['df_traces'].values[:,-1]
+        x_current = self.data['df_traces'].index.values
+        average = self.data['df_averages'].values[:,0]
+        x_avg = self.data['df_averages'].index.values
+
         # yavg = np.array(self.data['all_traces']).mean(axis=0)
-        yavg = self.current_average
-        self.plot_back_line.setData(x=x[2:-2], y=y[2:-2])
-        self.plot_front_line.setData(x=x[2:-2], y=yavg[2:-2])
+        # yavg = self.current_average
+        self.plot_back_line.setData(x=x_current[2:-2], y=current[2:-2])
+        self.plot_front_line.setData(x=x_avg[2:-2], y=average[2:-2])
         if self.peak_fit_data is not None:
             if self.fit_sech2_checkbox.isChecked() or self.fit_gauss_checkbox.isChecked():
                 yfit = self.peak_fit_data

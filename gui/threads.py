@@ -220,13 +220,18 @@ class Processor(Worker):
 
         step = 0.000152587890625
         minpos = self.shaker_positions.min()
+        min_t = (minpos/step)*.05
         maxpos = self.shaker_positions.max()
+        max_t = (minpos/step)*.05
+
         n_points = int((maxpos - minpos) / step)
 
         self.position_bins = np.array((self.shaker_positions - minpos) / step, dtype=int)
-        self.data_output = np.zeros(n_points + 1, dtype=np.float64)
+        self.result = np.zeros(n_points + 1, dtype=np.float64)
         self.normamlization_array = np.zeros(n_points + 1, dtype=np.float64)
 
+        self.output_array = np.zeros((2,n_points+1))
+        self.output_array[0] = np.linspace(min_t, max_t, n_points+1)
 
     @QtCore.pyqtSlot()
     def work(self):
@@ -237,11 +242,15 @@ class Processor(Worker):
                 self.project_dc()
             else:
                 self.project()
-            out = self.data_output/self.normamlization_array
-            self.newData.emit(out)
+                print(self.output_array.shape,self.result.shape,self.normamlization_array.shape)
+            self.output_array[1] = self.result / self.normamlization_array
+
+            self.newData.emit(self.output_array)
             print(' - Projected {} points to a {} pts array, with {} nans in : {:.2f} ms'.format(
-                len(self.signal),len(self.data_output),len(self.data_output)-len(out[np.isfinite(out)]),1000*(time.time() - t0)))
+                len(self.signal),len(self.result), len(self.result) - len(self.output_array[1][np.isfinite(self.output_array[1])]), 1000 * (time.time() - t0)))
         except Exception as e:
+            print(self.output_array.shape, self.result.shape, self.normamlization_array.shape)
+
             print('failed to project data with shape {} to shape {}.')
             self.error.emit(e)
 
@@ -251,14 +260,14 @@ class Processor(Worker):
 
         for i, pos in enumerate(self.position_bins):
             if self.dark_control[i]:
-                self.data_output[pos] += self.signal[i]
+                self.result[pos] += self.signal[i]
                 self.normamlization_array[pos] += 1.
             else:
-                self.data_output[pos] -= self.signal[i]
+                self.result[pos] -= self.signal[i]
 
     def project(self):
         for val, pos in zip(self.signal, self.position_bins):
-            self.data_output[pos] += val
+            self.result[pos] += val
             self.normamlization_array[pos] += 1.
 
 
