@@ -32,7 +32,7 @@ from PyQt5 import QtCore
 from nidaqmx import stream_readers
 from nidaqmx.constants import Edge, AcquisitionType
 
-from utilities.data import bin_dc_multi, bin_dc, project_to_time_axis
+from utilities.data import bin_dc_multi, bin_dc
 from utilities.math import gaussian, gaussian_fwhm, sech2_fwhm
 
 
@@ -48,7 +48,7 @@ class Thread(QtCore.QThread):
 class Worker(QtCore.QObject):
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
-    error = QtCore.pyqtSignal(OSError)
+    error = QtCore.pyqtSignal(Exception)
 
     def on_error(self, e):
         print('error in {} class'.format(type(self)))
@@ -129,22 +129,29 @@ class Streamer(Worker):
         self.newData.emit(self.data)
 
     def simulate_measure(self):
+
         t0 = time.time()
         n = np.arange(len(self.data[0]))
-        phase = np.random.rand(1) * 2 * np.pi
-        self.data[0, :] = np.cos(2*np.pi*n / 30000 + phase)
-        self.data[2, :] = np.array([i % 2 for i in range(len(self.data[0]))])
+        noise = np.random.rand(len(n))
+        phase = noise[0] * 2 * np.pi
+
+        amplitude = .5
+        self.data[0, :] =  np.cos(2*np.pi*n / 30000 + phase)*amplitude/2 #in volt
+
+        # self.data[2, :] = np.array([i % 2 for i in range(len(n))])
         for i in range(len(n)):
-            self.data[1, i] = self.data[0,i]/3 + 1*np.sin(np.random.rand(1))
-            if self.data[2,i] ==1:
-                self.data[1, i] += gaussian(self.data[0, i], 0, .1) + 1*np.random.rand(1)
+            self.data[2, i] = i % 2 # dark control channel filled with 1010...
+            self.data[1, i] = self.data[0,i]/3 + 1*np.sin(noise[2])
+            if i % 2 == 1:
+                self.data[1, i] += gaussian(self.data[0, i], 0, .1) + noise[i]
+
         dt = time.time()-t0
         time.sleep(max(self.n_samples/273000 - dt,0))
         self.newData.emit(self.data)
 
 
 class Binner(Worker):
-
+    """DEPRECATED"""
     def __init__(self, data, n_points, multithreading=True):
         super().__init__()
         self.data_input = data
@@ -199,29 +206,61 @@ class Binner(Worker):
         self.data_output = bin_dc(self.data_input, self.bins)
 
 
-class Projector(Worker):
+class Processor(Worker):
 
-    def __init__(self, data, n_points,dark_control=True):
+    def __init__(self, data, use_dark_control=True):
+
         super().__init__()
-        self.data_input = data
-        self.n_points = n_points
-        self.data_output = np.zeros(n_points)
-        self.dark_control = dark_control
+        self.shaker_positions = data[0]
+        self.signal = data[1]
+        self.dark_control = data[2]
+
+
+        self.use_dark_control = use_dark_control
+
+        step = 0.000152587890625
+        minpos = self.shaker_positions.min()
+        maxpos = self.shaker_positions.max()
+        n_points = int((maxpos - minpos) / step)
+
+        self.position_bins = np.array((self.shaker_positions - minpos) / step, dtype=int)
+        self.data_output = np.zeros(n_points + 1, dtype=np.float64)
+        self.normamlization_array = np.zeros(n_points + 1, dtype=np.float64)
+
 
     @QtCore.pyqtSlot()
     def work(self):
         t0 = time.time()
+
         try:
-            self.project_data()
+            if self.use_dark_control:
+                self.project_dc()
+            else:
+                self.project()
+            out = self.data_output/self.normamlization_array
+            self.newData.emit(out)
+            print(' - Projected {} points to a {} pts array, with {} nans in : {:.2f} ms'.format(
+                len(self.signal),len(self.data_output),len(self.data_output)-len(out[np.isfinite(out)]),1000*(time.time() - t0)))
         except Exception as e:
+            print('failed to project data with shape {} to shape {}.')
             self.error.emit(e)
-        print('data projected: emitting results: {}\nprocessing time: {}'.format(type(self.data_output),
-                                                                                 time.time() - t0))
-        self.newData.emit(self.data_output)
+
         self.finished.emit()
 
-    def project_data(self):
-        x, self.data_output = project_to_time_axis(self.data_input, self.n_points,dark_control=self.dark_control)
+    def project_dc(self):
+
+        for i, pos in enumerate(self.position_bins):
+            if self.dark_control[i]:
+                self.data_output[pos] += self.signal[i]
+                self.normamlization_array[pos] += 1.
+            else:
+                self.data_output[pos] -= self.signal[i]
+
+    def project(self):
+        for val, pos in zip(self.signal, self.position_bins):
+            self.data_output[pos] += val
+            self.normamlization_array[pos] += 1.
+
 
 class Fitter(Worker):
 

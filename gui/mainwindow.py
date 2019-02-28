@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import QMainWindow, QRadioButton, QWidget, QGridLayout, QHB
     QGroupBox, QLabel, QLineEdit
 from pyqtgraph.Qt import QtCore, QtGui
 
-from gui.threads import Streamer, Thread, Projector, Fitter
+from gui.threads import Streamer, Thread, Fitter, Processor
 
 from utilities.data import fit_peak
 from utilities.math import gaussian_fwhm, sech2_fwhm
@@ -78,7 +78,7 @@ class FastScanMainWindow(QMainWindow):
         self.peak_fit_parameters = None
         self.peak_fit_data = None
 
-        self.pp_method = Projector  # project or bin: these are the accepted methods
+        # self.processing_method = 'project'  # project or bin: these are the accepted methods
         self._processing = False
 
         self.main_clock = QTimer()
@@ -403,7 +403,7 @@ class FastScanMainWindow(QMainWindow):
         self._processing = True
         self.processor_thread = Thread()
         self.processor_thread.stopped.connect(self.kill_processor_thread)
-        self.processor = self.pp_method(data, self.settings['n_plot_points'], dark_control=self.dark_control)
+        self.processor = Processor(data, use_dark_control=self.dark_control)
         self.processor.newData[np.ndarray].connect(self.on_processor_data)
         self.processor.error.connect(self.raise_thread_error)
         self.processor.finished.connect(self.on_processor_finished)
@@ -413,10 +413,15 @@ class FastScanMainWindow(QMainWindow):
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_processor_data(self, data):
-        print('processed data into {}'.format(data.shape))
+        print('processed data recieved')
         self._processing = False
         self.processor_thread.exit()
-        # self.data['last_trace'] = data
+        #draw data on plot
+
+        # self.plot_back_line.setData(x=x[2:-2], y=data[2:-2])
+
+        #
+        self.data['last_trace'] = data
         if self.data['all_traces'] is None:
             self.data['all_traces'] = []
         self.data['all_traces'].append(data)
@@ -470,8 +475,12 @@ class FastScanMainWindow(QMainWindow):
         self.fitter_thread = None
         self.fitter = None
 
-    def raise_thread_error(self, e):
-        print('---Error---\n{}'.format(e))
+    def raise_thread_error(self, ex):
+        template = "---------- ERROR ------------\n" \
+                   "An exception of type {0} occurred. Arguments:\n{1!r}" \
+                   "\n-----------------------------"
+        message = template.format(type(ex).__name__, ex.args)
+        print(message)
 
     def draw_raw_signal_plot(self, xd, yd):
         self.raw_data_plot.setData(x=xd, y=yd)
@@ -479,8 +488,8 @@ class FastScanMainWindow(QMainWindow):
     def draw_main_plot(self):
         if self.data['time_axis'] is None:
             self.make_time_axis()
-        x = self.data['time_axis']
         y = self.data['all_traces'][-1]
+        x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
 
         print(len(x))
         print(len(y))
@@ -492,6 +501,8 @@ class FastScanMainWindow(QMainWindow):
             if self.fit_sech2_checkbox.isChecked() or self.fit_gauss_checkbox.isChecked():
                 yfit = self.peak_fit_data
                 self.plot_fit_line.setData(x=x[2:-2], y=yfit[2:-2])
+
+
 
     def closeEvent(self, event):
         # geometry = self.saveGeometry()

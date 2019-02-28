@@ -65,26 +65,6 @@ def bin_multi(arguments):
         normarray[j]+=1
     return binned_signal, normarray
 
-def project_to_time_axis(data,n_points,dark_control=True):
-    minpos = data[0].min()
-    maxpos = data[0].max()
-    pos_bin = np.array((n_points-1)*(data[0] - minpos)/(maxpos-minpos),dtype=int)
-    result = np.zeros(n_points)
-    normarray = np.zeros(n_points,dtype=int)
-    if dark_control:
-        for i in range(len(pos_bin)):
-            if data[2,i] == 1:
-                result[pos_bin[i]] += data[1,i]
-                normarray[pos_bin[i]] +=1
-            if data[2,i] == 0:
-                result[pos_bin[i]] -= data[1,i]
-    else:
-        for val,p in zip(data[1],pos_bin):
-            result[p] += val
-            normarray[p]+=1
-    norm_res = result/normarray
-    x_axis = np.linspace(minpos,maxpos,n_points)
-    return x_axis, norm_res
 
 def fit_peak(x,y,model='sech2',guess=(1,0,1e-13,.1)):
     if model == 'sech2':
