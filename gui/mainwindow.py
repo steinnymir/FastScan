@@ -68,14 +68,13 @@ class FastScanMainWindow(QMainWindow):
                          'n_plot_points': 15000
                          }
 
-
         self.data = {'processed': None,
                      'unprocessed': np.zeros((3, 0)),
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
-                     'df_traces':None,
-                     'df_averages':None
+                     'df_traces': None,
+                     'df_averages': None
                      }
 
         self._processing_tick = None
@@ -262,6 +261,14 @@ class FastScanMainWindow(QMainWindow):
 
         return widget
 
+    def setup_plot_widget(self, plot_widget, title='Plot'):
+        plot_widget.showAxis('top', True)
+        plot_widget.showAxis('right', True)
+        plot_widget.showGrid(True, True, .2)
+        plot_widget.setLabel('left', 'Value', units='V')
+        plot_widget.setLabel('bottom', 'Time', units='s')
+        plot_widget.setLabel('top', title)
+
     def save_data(self):
         filename = self.save_name_ledit.text()
 
@@ -311,14 +318,6 @@ class FastScanMainWindow(QMainWindow):
     def time_axis(self):
         return self.data['time_axis']
 
-    def setup_plot_widget(self, plot_widget, title='Plot'):
-        plot_widget.showAxis('top', True)
-        plot_widget.showAxis('right', True)
-        plot_widget.showGrid(True, True, .2)
-        plot_widget.setLabel('left', 'Value', units='V')
-        plot_widget.setLabel('bottom', 'Time', units='s')
-        plot_widget.setLabel('top', title)
-
     @QtCore.pyqtSlot()
     def reset_data(self):
 
@@ -332,7 +331,6 @@ class FastScanMainWindow(QMainWindow):
 
     def make_time_axis(self):
         amp = self.settings['shaker_amplitude']
-        n_pts = self.settings['n_plot_points']
         self.data['time_axis'] = np.linspace(-amp, amp, self.settings['n_plot_points'])
         return self.data['time_axis']
 
@@ -407,6 +405,7 @@ class FastScanMainWindow(QMainWindow):
 
     def process_data(self, data):
         self._processing = True
+
         self.processor_thread = Thread()
         self.processor_thread.stopped.connect(self.kill_processor_thread)
         self.processor = Processor(data, use_dark_control=self.dark_control)
@@ -422,19 +421,17 @@ class FastScanMainWindow(QMainWindow):
         print('processed data recieved')
         self._processing = False
         self.processor_thread.exit()
-        #draw data on plot
+        # draw data on plot
         time_axis = data[0]
         signal = data[1]
-        signal_df = pd.DataFrame(data=signal,index=time_axis)
+        signal_df = pd.DataFrame(data=signal, index=time_axis)
 
         if self.data['df_traces'] is None:
             self.data['df_traces'] = signal_df
         else:
-            self.data['df_traces'] = pd.concat([self.data['df_traces'],signal_df],axis=1)
-
+            self.data['df_traces'] = pd.concat([self.data['df_traces'], signal_df], axis=1)
 
         self.draw_main_plot()
-
 
     def on_processor_finished(self):
         print('Processor finished signal recieved')
@@ -448,7 +445,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.fitter_thread = Thread()
         self.fitter_thread.stopped.connect(self.kill_fitter_thread)
-        self.fitter = Fitter(time_axis,data)
+        self.fitter = Fitter(time_axis, data)
         self.fitter.newData[np.ndarray].connect(self.on_fitter_data)
         self.fitter.error.connect(self.raise_thread_error)
         self.fitter.finished.connect(self.on_fitter_finished)
@@ -467,10 +464,10 @@ class FastScanMainWindow(QMainWindow):
             else:
                 model = None
             if model is not None:
-                self.peak_fit_data = model(self.time_axis,*popt)
+                self.peak_fit_data = model(self.time_axis, *popt)
                 self.plot_fit_line.setData(x=self.time_axis[2:-2], y=self.peak_fit_data[2:-2])
                 self.fit_report_label.setText('Parameters:\nA: {} x0: {} FWHM: {}, c: {}'.format(*popt))
-                self.pulse_duration_label.setText('{} fs'.format(popt[2]*1e15))
+                self.pulse_duration_label.setText('{} fs'.format(popt[2] * 1e15))
 
     def on_fitter_finished(self):
         print('Fitter finished signal recieved')
@@ -492,24 +489,23 @@ class FastScanMainWindow(QMainWindow):
 
     def draw_main_plot(self):
 
-        current = self.data['df_traces'].values[:,-1]
+        current = self.data['df_traces'].values[:, -1]
         x_current = self.data['df_traces'].index.values
         self.plot_back_line.setData(x=x_current[2:-2], y=current[2:-2])
 
-        x_avg,y_avg = self.get_avg_curve(length=1000,n_averages=0)
+        x_avg, y_avg = self.get_avg_curve(length=1000, n_averages=0)
 
         self.plot_front_line.setData(x=x_avg, y=y_avg)
 
         if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
-            self.fit_data(x_avg,y_avg)
+            self.fit_data(x_avg, y_avg)
 
-
-    def get_avg_curve(self,length=1000,n_averages=0):
+    def get_avg_curve(self, length=1000, n_averages=0):
 
         if n_averages == 0:
             df = self.data['df_traces']
         else:
-            n_averages = min(len(self.data['df_traces'].columns),n_averages)
+            n_averages = min(len(self.data['df_traces'].columns), n_averages)
             df = self.data['df_traces'][self.data['df_traces'][:-n_averages]]
 
         n_plt_pts = length
@@ -521,8 +517,6 @@ class FastScanMainWindow(QMainWindow):
         binned = df.groupby(pd.cut(df.index, bins)).mean()
         avg = binned.mean(axis=1).values
         return plot_bins, avg
-
-
 
     def closeEvent(self, event):
         # geometry = self.saveGeometry()

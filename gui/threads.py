@@ -22,8 +22,9 @@
 
 import os, sys
 import time
-from multiprocessing import Pool
 
+import multiprocessing as mp
+import queue
 from scipy.optimize import curve_fit
 
 try:
@@ -35,7 +36,6 @@ except:
 
 import numpy as np
 from PyQt5 import QtCore
-
 
 from utilities.data import bin_dc_multi, bin_dc
 from utilities.math import gaussian, gaussian_fwhm, sech2_fwhm
@@ -194,7 +194,7 @@ class Binner(Worker):
             args.append((data, self.bins))
         print('data prepared, starting multiprocess')
 
-        pool = Pool(chunks)
+        pool = mp.Pool(chunks)
         results = pool.map(bin_dc_multi, args)
         results = np.array(results)
 
@@ -276,6 +276,135 @@ class Processor(Worker):
         for val, pos in zip(self.signal, self.position_bins):
             self.result[pos] += val
             self.normamlization_array[pos] += 1.
+
+
+class Processor_multi(Worker):
+    ready_for_data = QtCore.pyqtSignal(int)
+    def __init__(self,id):
+
+        super().__init__()
+        self.id = id
+
+    @QtCore.pyqtSlot()
+    def work(self,data,use_dark_control=True):
+        t0 = time.time()
+        shaker_positions = data[0]
+        signal = data[1]
+        dark_control = data[2]
+
+
+        step = 0.000152587890625
+        minpos = shaker_positions.min()
+        min_t = (minpos/step)*.05 # consider 0.05 ps step size from shaker digitalized signal
+        maxpos = shaker_positions.max()
+        max_t = (maxpos/step)*.05
+
+        n_points = int((maxpos - minpos) / step)
+
+        position_bins = np.array((shaker_positions - minpos) / step, dtype=int)
+        result = np.zeros(n_points + 1, dtype=np.float64)
+        normamlization_array = np.zeros(n_points + 1, dtype=np.float64)
+
+        output_array = np.zeros((2,n_points+1))
+        output_array[0] = np.linspace(min_t, max_t, n_points+1)
+
+        try:
+            if use_dark_control:
+                for val, pos in zip(self.signal, self.position_bins):
+                    self.result[pos] += val
+                    self.normamlization_array[pos] += 1.
+
+            else:
+                for val, pos in zip(self.signal, self.position_bins):
+                    self.result[pos] += val
+                    self.normamlization_array[pos] += 1.
+
+                print(output_array.shape,result.shape,normamlization_array.shape)
+            output_array[1] = result / normamlization_array
+
+            self.newData.emit(output_array)
+            print(' - Projected {} points to a {} pts array, with {} nans in : {:.2f} ms'.format(
+                len(signal),len(result), len(result) - len(output_array[1][np.isfinite(output_array[1])]), 1000 * (time.time() - t0)))
+        except Exception as e:
+            print(output_array.shape, result.shape, normamlization_array.shape)
+
+            print('failed to project data with shape {} to shape {}.')
+            self.error.emit(e)
+        time.sleep(0.002)
+
+        self.isReady.emit(self.id)
+
+
+class DataManager(Worker):
+    """
+    This should get data from streamer, through signals in main gui and assign processors to analyze it.
+    TODO: implement this class in mainwinow.
+
+
+    """
+    def __init__(self, buffer_size=30000):
+        super().__init__()
+        self.stream_queue = mp.Queue()
+
+        self.res_from_previous= np.zeros((3,0))
+        self.buffer_size = buffer_size
+
+        self.timer = QtCore.QTimer(1)
+        self.timer.timeout.connect(self.on_timer)
+        self.timer.start()
+
+
+        self.processors = []
+        self.threads = []
+        self.processor_ready = []
+        for i in range(os.cpu_count()-2):
+
+            self.processors.append(Processor_multi(i))
+            self.threads.append(Thread())
+            self.processor_ready.append(False)
+            self.processors[i].newData[np.ndarray].connect(self.on_processor_data)
+            self.processors[i].error.connect(self.error.emit)
+            self.processors[i].isReady.connect(self.set_processor_ready)
+            self.processors[i].finished.connect(self.on_processor_finished)
+
+            self.processors[i].moveToThread(self.thread[i])
+            self.thread[i].started.connect(self.processors[i].work)
+            self.thread[i].start()
+
+    @QtCore.pyqtSlot()
+    def set_processor_ready(self,id):
+        self.processor_ready[id] = True
+
+    @QtCore.pyqtSlot()
+    def add_data_to_queue(self,streamer_data):
+        """divide data in smaller chunks, for faster data processing."""
+        if self.rest_from_previous.shape[1] > 0:
+            streamer_data = np.append(self.rest_from_previous,streamer_data,axis=1)
+
+        n_chunks = streamer_data.shape[1]//self.buffer_size
+
+        chunks = np.array_split(streamer_data,n_chunks, axis=1)
+        if chunks[-1].shape[1] < self.buffer_size:
+            self.rest_from_previous = chunks.pop(-1)
+        for chunk in chunks:
+            self.stream_queue.put(chunk)
+
+    @QtCore.pyqtSlot()
+    def on_timer(self):
+        for processor,ready in zip(self.processors,self.processor_ready):
+            if ready:
+                processor.work(self.stream_queue.get(),use_dark_control=True)
+
+    @QtCore.pyqtSlot()
+    def on_processor_data(self,processed_data):
+        self.newData.emit(processed_data)
+
+    def on_thread_error(self,e):
+        self.error.emit(e)
+
+
+
+
 
 
 class Fitter(Worker):
