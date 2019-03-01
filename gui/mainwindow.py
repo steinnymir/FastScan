@@ -63,10 +63,12 @@ class FastScanMainWindow(QMainWindow):
 
         self.settings = {'laser_trigger_frequency': 273000,
                          'shaker_frequency': 10,
-                         'n_samples': 100000,
+                         'n_samples': 30000,
                          'shaker_amplitude': 10,
                          'n_plot_points': 15000
                          }
+
+
         self.data = {'processed': None,
                      'unprocessed': np.zeros((3, 0)),
                      'time_axis': None,
@@ -425,20 +427,14 @@ class FastScanMainWindow(QMainWindow):
         signal = data[1]
         signal_df = pd.DataFrame(data=signal,index=time_axis)
 
-        self.data['last_trace'] = signal_df
         if self.data['df_traces'] is None:
-            self.data['df_traces'] = pd.DataFrame(data=signal,index=time_axis)
-            self.data['df_averages'] = self.data['df_traces']
-
+            self.data['df_traces'] = signal_df
         else:
-            signal_df = pd.DataFrame(data=signal, index=time_axis)
             self.data['df_traces'] = pd.concat([self.data['df_traces'],signal_df],axis=1)
-            self.data['df_averages'] = self.data['df_traces'].mean(axis=1)
 
 
         self.draw_main_plot()
-        if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
-            self.fit_data(self.current_average)
+
 
     def on_processor_finished(self):
         print('Processor finished signal recieved')
@@ -448,11 +444,11 @@ class FastScanMainWindow(QMainWindow):
         self.processor_thread = None
         self.processor = None
 
-    def fit_data(self, data):
+    def fit_data(self, time_axis, data):
 
         self.fitter_thread = Thread()
         self.fitter_thread.stopped.connect(self.kill_fitter_thread)
-        self.fitter = Fitter(self.time_axis,data)
+        self.fitter = Fitter(time_axis,data)
         self.fitter.newData[np.ndarray].connect(self.on_fitter_data)
         self.fitter.error.connect(self.raise_thread_error)
         self.fitter.finished.connect(self.on_fitter_finished)
@@ -495,24 +491,36 @@ class FastScanMainWindow(QMainWindow):
         self.raw_data_plot.setData(x=xd, y=yd)
 
     def draw_main_plot(self):
-        # if self.data['time_axis'] is None:
-        #     self.make_time_axis()
-        # y = self.data['all_traces'][-1]
-        # x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
 
         current = self.data['df_traces'].values[:,-1]
         x_current = self.data['df_traces'].index.values
-        average = self.data['df_averages'].values[:,0]
-        x_avg = self.data['df_averages'].index.values
-
-        # yavg = np.array(self.data['all_traces']).mean(axis=0)
-        # yavg = self.current_average
         self.plot_back_line.setData(x=x_current[2:-2], y=current[2:-2])
-        self.plot_front_line.setData(x=x_avg[2:-2], y=average[2:-2])
-        if self.peak_fit_data is not None:
-            if self.fit_sech2_checkbox.isChecked() or self.fit_gauss_checkbox.isChecked():
-                yfit = self.peak_fit_data
-                self.plot_fit_line.setData(x=x[2:-2], y=yfit[2:-2])
+
+        x_avg,y_avg = self.get_avg_curve(length=1000,n_averages=0)
+
+        self.plot_front_line.setData(x=x_avg, y=y_avg)
+
+        if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
+            self.fit_data(x_avg,y_avg)
+
+
+    def get_avg_curve(self,length=1000,n_averages=0):
+
+        if n_averages == 0:
+            df = self.data['df_traces']
+        else:
+            n_averages = min(len(self.data['df_traces'].columns),n_averages)
+            df = self.data['df_traces'][self.data['df_traces'][:-n_averages]]
+
+        n_plt_pts = length
+        a, b = df.index.min(), df.index.max()
+        bins = np.linspace(a, b, n_plt_pts + 1)
+        step = bins[1] - bins[0]
+        plot_bins = np.linspace(a + step / 2, b - step / 2, n_plt_pts)
+
+        binned = df.groupby(pd.cut(df.index, bins)).mean()
+        avg = binned.mean(axis=1).values
+        return plot_bins, avg
 
 
 

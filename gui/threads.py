@@ -26,11 +26,16 @@ from multiprocessing import Pool
 
 from scipy.optimize import curve_fit
 
-import nidaqmx
+try:
+    import nidaqmx
+    from nidaqmx import stream_readers
+    from nidaqmx.constants import Edge, AcquisitionType
+except:
+    print('no nidaqmx package installed.')
+
 import numpy as np
 from PyQt5 import QtCore
-from nidaqmx import stream_readers
-from nidaqmx.constants import Edge, AcquisitionType
+
 
 from utilities.data import bin_dc_multi, bin_dc
 from utilities.math import gaussian, gaussian_fwhm, sech2_fwhm
@@ -106,6 +111,8 @@ class Streamer(Worker):
 
     def start_simulated_acquisition(self):
         self.should_stop = False
+
+
         if self.iterations is None:
             i = 0
             while not self.should_stop:
@@ -135,7 +142,7 @@ class Streamer(Worker):
         noise = np.random.rand(len(n))
         phase = noise[0] * 2 * np.pi
 
-        amplitude = .5
+        amplitude = .5*(1+.02*np.random.uniform(-1,1))
         self.data[0, :] =  np.cos(2*np.pi*n / 30000 + phase)*amplitude/2 #in volt
 
         # self.data[2, :] = np.array([i % 2 for i in range(len(n))])
@@ -143,7 +150,7 @@ class Streamer(Worker):
             self.data[2, i] = i % 2 # dark control channel filled with 1010...
             self.data[1, i] = self.data[0,i]/3 + 1*np.sin(noise[2])
             if i % 2 == 1:
-                self.data[1, i] += gaussian(self.data[0, i], 0, .1) + noise[i]
+                self.data[1, i] += gaussian(self.data[0, i], 0, .01) + noise[i]
 
         dt = time.time()-t0
         time.sleep(max(self.n_samples/273000 - dt,0))
@@ -220,9 +227,9 @@ class Processor(Worker):
 
         step = 0.000152587890625
         minpos = self.shaker_positions.min()
-        min_t = (minpos/step)*.05
+        min_t = (minpos/step)*.05 # consider 0.05 ps step size from shaker digitalized signal
         maxpos = self.shaker_positions.max()
-        max_t = (minpos/step)*.05
+        max_t = (maxpos/step)*.05
 
         n_points = int((maxpos - minpos) / step)
 
