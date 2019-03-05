@@ -24,7 +24,9 @@ import sys
 from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from pyqtgraph.Qt import QtCore, QtGui
-from gui.mainwindow import FastScanMainWindow
+
+from gui.mainwindow import FastScanMainWindow as FastScanMainWindow_old
+from gui.widgets import FastScanMainWindow
 
 
 def main():
@@ -51,40 +53,6 @@ def main():
         app.exec_()
     except:
         print('exiting')
-
-
-class testwindow(QMainWindow):
-
-    def __init__(self):
-        super(testwindow, self).__init__()
-        hbox = QtGui.QHBoxLayout(self)
-
-        topleft = QtGui.QFrame(self)
-        topleft.setFrameShape(QtGui.QFrame.StyledPanel)
-        topleft.setGeometry(0, 0, 300, 0)
-
-        topright = QtGui.QFrame(self)
-        topright.setFrameShape(QtGui.QFrame.StyledPanel)
-        topright.setGeometry(0, 320, 1000, 0)
-
-        bottom = QtGui.QFrame(self)
-        bottom.setFrameShape(QtGui.QFrame.StyledPanel)
-        bottom.setGeometry(1210, 0, 1280, 0)
-
-        splitter1 = QtGui.QSplitter(QtCore.Qt.Horizontal)
-        splitter1.addWidget(topleft)
-        splitter1.addWidget(topright)
-
-        splitter2 = QtGui.QSplitter(QtCore.Qt.Vertical)
-        splitter2.addWidget(splitter1)
-        splitter2.addWidget(bottom)
-
-        hbox.addWidget(splitter2)
-
-        self.setLayout(hbox)
-
-        QtGui.QApplication.setStyle(QtGui.QStyleFactory.create('Cleanlooks'))
-
 
 
 

@@ -63,7 +63,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.settings = {'laser_trigger_frequency': 273000,
                          'shaker_frequency': 10,
-                         'n_samples': 30000,
+                         'n_samples': 60000,
                          'shaker_amplitude': 10,
                          'n_plot_points': 15000
                          }
@@ -405,7 +405,7 @@ class FastScanMainWindow(QMainWindow):
 
     def process_data(self, data):
         self._processing = True
-
+        t = time.time()
         self.processor_thread = Thread()
         self.processor_thread.stopped.connect(self.kill_processor_thread)
         self.processor = Processor(data, use_dark_control=self.dark_control)
@@ -415,6 +415,7 @@ class FastScanMainWindow(QMainWindow):
         self.processor.moveToThread(self.processor_thread)
         self.processor_thread.started.connect(self.processor.work)
         self.processor_thread.start()
+        print('processor started in {:.2f} ms'.format((time.time()-t)*1000))
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_processor_data(self, data):
