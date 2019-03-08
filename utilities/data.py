@@ -24,6 +24,8 @@ import numpy as np
 from scipy.optimize import curve_fit
 from multiprocessing import Pool
 from utilities.math import gaussian_fwhm, sech2_fwhm
+
+
 def bin_dc(data,bins):
     binned_signal = np.zeros_like(bins)
     normarray = np.zeros_like(bins)

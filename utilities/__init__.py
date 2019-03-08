@@ -19,7 +19,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
+import logging
+from logging.config import fileConfig
 
+fileConfig('./utilities/cfg/logging_config.ini')
+logger = logging.getLogger(__name__)
 
 def main():
     pass

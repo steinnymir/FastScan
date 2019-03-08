@@ -20,13 +20,16 @@
 
 """
 import sys
-
+import logging
+from logging.config import fileConfig
 from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from pyqtgraph.Qt import QtCore, QtGui
 
-from gui.mainwindow import FastScanMainWindow as FastScanMainWindow_old
-from gui.widgets import FastScanMainWindow
+from gui.singlewidget import FastScanMainWindow as FastScanMainWindow_old
+from gui.mainwindow import FastScanMainWindow
+from configparser import ConfigParser
+
 
 
 def main():
@@ -35,6 +38,13 @@ def main():
     sys._excepthook = sys.excepthook
     # Set the exception hook to our wrapping function
     sys.excepthook = my_exception_hook
+
+
+    #create main logger
+    fileConfig('./utilities/cfg/logging_config.ini')
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    logger.debug('Started logger')
 
     app = QCoreApplication.instance()
 

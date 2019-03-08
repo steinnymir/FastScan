@@ -20,13 +20,30 @@
 
 """
 import logging
-from logging.config import fileConfig
 
-fileConfig('./utilities/cfg/logging_config.ini')
-logger = logging.getLogger(__name__)
+from PyQt5 import QtCore
+
 
 def main():
     pass
+
+
+class Thread(QtCore.QThread):
+    stopped = QtCore.pyqtSignal()
+
+    def stop(self):
+        self.threadactive = False
+        self.wait()
+        self.stopped.emit()
+
+
+class Worker(QtCore.QObject):
+
+    error = QtCore.pyqtSignal(Exception)
+
+    def on_thread_error(self, e):
+        print('error in {} class'.format(type(self)))
+        self.error.emit(e)
 
 
 if __name__ == '__main__':
