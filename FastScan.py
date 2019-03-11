@@ -54,8 +54,6 @@ def main():
     prg = FastScanMainWindow()
 
 
-    # prg = testwindow()
-
     # print('showing GUI')
     prg.show()
 

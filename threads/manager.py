@@ -19,19 +19,17 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
+import logging
 import multiprocessing as mp
 import os
 
-import xarray as xr
-import logging
-
 import numpy as np
+import xarray as xr
 from PyQt5 import QtCore
 
 from threads.core import Thread, Worker
-from threads.streamer import Streamer
-from threads.processor import Processor
 from threads.processor import Processor_multi
+from threads.streamer import Streamer
 
 
 def main():
@@ -50,12 +48,12 @@ class ThreadManager(Worker):
 
     """
     newStreamerData = QtCore.pyqtSignal(np.ndarray)
-    newProcessedData = QtCore.pyqtSignal(xr.DataArray)
+    newProcessedData = QtCore.pyqtSignal(dict)
     acquisitionStopped = QtCore.pyqtSignal()
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
 
-    def __init__(self, processor_buffer=30000, streamer_buffer=90000, processor_timer=10):
+    def __init__(self, processor_buffer=30000, streamer_buffer=90000):
         super().__init__()
 
         self.logger = logging.getLogger('{}.ThreadManager'.format(__name__))
@@ -64,28 +62,33 @@ class ThreadManager(Worker):
 
         self._SIMULATE = False
         self._darkcontrol = False
-        self.stream_queue = mp.Queue()
+        self.stream_queue = mp.Queue()  # Queue where to store unprocessed streamer data
+        self.processor_queue = mp.Queue()
+        self.data_dict = {} #dict containing data to be plotted
+        # self.dataset = xr.Dataset()  # dataset containing averages, fits etc...
+        # self.da_all = None # will be DataArray containing all scans
 
         self.res_from_previous = np.zeros((3, 0))
         self.__processor_buffer_size = processor_buffer
         self.__streamer_buffer_size = streamer_buffer
 
         self.timer = QtCore.QTimer()
-        self.timer.setInterval(processor_timer)
+        self.timer.setInterval(1000./60)
         self.timer.timeout.connect(self.on_timer)
         self.timer.start()
 
-        self.processed_averages = None #container for the xarray dataarray of all averages
+        self.processed_averages = None  # container for the xarray dataarray of all averages
 
         self.create_processors()
         self.create_streamer()
 
+    # %%========== Properties ===========
     def toggle_simulation(self, bool):
         self.stop_streamer()
         self._SIMULATE = bool
         self.create_streamer()
 
-    def toggle_darkcontrol(self,bool):
+    def toggle_darkcontrol(self, bool):
         self._darkcontrol = bool
 
     @property
@@ -110,11 +113,39 @@ class ThreadManager(Worker):
         assert 0 < buffer_size < 1000000
         self.__streamer_buffer_size = buffer_size
 
-    def set_streamer_buffer(self,val):
+    def set_streamer_buffer(self, val):
         self.streamer_buffer_size = val
 
-    def set_processor_buffer(self,val):
+    def set_processor_buffer(self, val):
         self.processor_buffer_size = val
+
+    # %%========== Methods ===========
+    @QtCore.pyqtSlot()
+    def on_timer(self):
+
+        self.process_available_stream_data()
+        if not self.processor_queue.empty():  # add a processed dataarray to the collection dataset
+            da = self.processor_queue.get()
+            try:
+                self.data_dict['all'] = xr.concat([self.data_dict['all'], da], 'avg')
+                self.calculate_average(100)
+            except KeyError:
+                self.data_dict['all'] = da
+
+            self.newProcessedData.emit(self.data_dict)
+            self.logger.debug('emitting processed dataset')
+
+    def calculate_average(self,n):
+        if 'avg' in self.data_dict['all'].dims:
+            self.data_dict['average'] = self.data_dict['all'][-n:].mean('avg')
+
+    def process_available_stream_data(self):
+        """ picks the first ready processor and passes a chunk of data."""
+        for processor, ready in zip(self.processors, self.processor_ready):
+            if ready:
+                if not self.stream_queue.empty():
+                    self.logger.debug('processing data with processor {}'.format(processor.id))
+                    processor.work(self.stream_queue.get(), use_dark_control=self._darkcontrol)
 
     def create_streamer(self):
 
@@ -138,9 +169,6 @@ class ThreadManager(Worker):
         self.streamer.stop_acquisition()
         self.streamer_thread.exit()
         # self.streamer_thread.stop()
-
-    def reset_data(self):
-        pass
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, streamer_data):
@@ -178,7 +206,7 @@ class ThreadManager(Worker):
             self.processors.append(Processor_multi(i))
             self.processor_threads.append(Thread())
             self.processor_ready.append(False)
-            self.processors[i].newData[xr.DataArray].connect(self.on_processor_data)
+            self.processors[i].newData[np.ndarray].connect(self.on_processor_data)
             self.processors[i].error.connect(self.error.emit)
             self.processors[i].isReady.connect(self.set_processor_ready)
             self.processors[i].finished.connect(self.on_processor_finished)
@@ -191,30 +219,22 @@ class ThreadManager(Worker):
     def set_processor_ready(self, id):
         self.processor_ready[id] = True
 
-    @QtCore.pyqtSlot()
-    def on_timer(self):
-        """ picks the first ready processor and passes a chunk of data."""
-        for processor, ready in zip(self.processors, self.processor_ready):
-            if ready:
-                if not self.stream_queue.empty():
-                    self.logger.debug('processing data with processor {}'.format(processor.id))
-                    processor.work(self.stream_queue.get(), use_dark_control=self._darkcontrol)
-
     @QtCore.pyqtSlot(xr.DataArray)
-    def on_processor_data(self, processed_data):
+    def on_processor_data(self, processed_dataarray):
         """ called when new processed data is available
 
-        This emits data to the main window, so it can be plotted or something else..."""
-
-
-        self.newProcessedData.emit(processed_data)
+        This emits data to the main window, so it can be plotted..."""
+        self.processor_queue.put(processed_dataarray)
+        # self.newProcessedData.emit(processed_data)
 
     @QtCore.pyqtSlot()
     def on_processor_finished(self):
         self.logger.debug('Processor finished working')
 
-    def close(self):
+    def reset_data(self):
+        self.dataset = xr.Dataset()
 
+    def close(self):
         self.stop_streamer()
         for thread in self.processor_threads:
             thread.exit()

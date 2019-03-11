@@ -22,7 +22,6 @@
 import time
 
 import xarray as xr
-
 import numpy as np
 import pyqtgraph as pg
 import qdarkstyle
@@ -253,8 +252,8 @@ class FastScanMainWindow(QMainWindow):
         # # self.visual_widget.add_main_plot_line('test',(255,255,255))
         # self.visual_widget.plot_main('test', x, y)
 
-    @QtCore.pyqtSlot(xr.DataArray)
-    def on_processed_data(self,da):
+    @QtCore.pyqtSlot(dict)
+    def on_processed_data(self,dataset):
         try:
             t0=self.processor_tick
             self.processor_tick = time.time()
@@ -267,12 +266,11 @@ class FastScanMainWindow(QMainWindow):
         except:
             self.processor_tick = time.time()
 
-        self.visual_widget.update_averages(da)
+        self.visual_widget.update_dataset(dataset)
 
         # self.visual_widget.plot_main('processed signal', data['last'], data[1])
         # self.visual_widget.plot_main('average', )
-
-        # self.logger.debug('recieved processed data as {} - {}'.format(type(data),data.shape))
+        self.logger.debug('recieved processed data as {}'.format(type(dataset)))
 
     def on_streamer_data(self,data):
         n_samples = data.shape[1]

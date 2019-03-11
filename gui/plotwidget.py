@@ -21,12 +21,13 @@
 """
 
 import pyqtgraph as pg
+import xarray as xr
 import numpy as np
+import multiprocessing as mp
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from pyqtgraph.Qt import QtCore, QtGui
 import logging
-import xarray as xr
 
 class FastScanPlotWidget(QWidget):
 
@@ -41,9 +42,7 @@ class FastScanPlotWidget(QWidget):
         self.clock.timeout.connect(self.on_clock)
         self.clock.start()
 
-
-
-
+        self.plot_queue = mp.Queue()
 
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -82,20 +81,18 @@ class FastScanPlotWidget(QWidget):
     def resizeEvent(self, event):
         h = self.frameGeometry().height()
         w = self.frameGeometry().width()
-
         self.main_plot_widget.setMinimumHeight(int(h * .7))
         self.main_plot_widget.setMinimumWidth(500)
 
-    def update_averages(self,da):
-        if self.da is None:
-            self.da = da
-        else:
-            self.da = xr.concat([self.da, da], 'avg')
-            average_curve = self.da.mean('avg')
-            self.main_plot_lines['average_curve']['y'] = np.array(average_curve)
-            self.main_plot_lines['average_curve']['y'] = np.array(average_curve.time)
-        self.main_plot_lines['last_curve']['y'] = np.array(da)
-        self.main_plot_lines['last_curve']['y'] = np.array(da.time)
+    @QtCore.pyqtSlot(dict)
+    def update_dataset(self,data_dict):
+        self.plot_queue.put(data_dict)
+        # if 'all' in dataset.data_vars:
+        #     ds = dataset['all'][-1,...]
+        #     self.plot_main('last',x=np.array(ds),y=np.array(ds.time),pen=(255,255,255))
+        # if 'average' in dataset.data_vars:
+        #     ds = dataset['average'][-1,...]
+        #     self.plot_main('last',x=np.array(ds),y=np.array(ds.time),pen=(255,255,255))
 
     def add_main_plot_line(self, name, pen):
         if name not in self.main_plot_lines.keys():
@@ -107,6 +104,7 @@ class FastScanPlotWidget(QWidget):
         else:
             self.main_plot_lines[name]['plot'].setPen(pen)
 
+
     def add_secondary_plot_line(self, name, pen):
         if name not in self.secondary_plot_lines.keys():
             plot_line = self.secondary_plot_widget.plot()
@@ -117,29 +115,59 @@ class FastScanPlotWidget(QWidget):
         else:
             self.secondary_plot_lines[name]['plot'].setPen(pen)
 
-    def plot_main(self, name, x=None, y=None):
+    def plot_main(self, name, x=None, y=None,pen=(255,255,255)):
         if name not in self.main_plot_lines.keys():
             self.logger.debug('adding {} curve to main plot'.format(name))
-            self.add_main_plot_line(name, (255, 255, 255))
+            self.add_main_plot_line(name, pen)
         self.main_plot_lines[name]['x'] = x
         self.main_plot_lines[name]['y'] = y
 
-    def plot_secondary(self, name, x=None, y=None):
+    def plot_secondary(self, name, x=None, y=None,pen=(255,255,255)):
         if name not in self.secondary_plot_lines.keys():
             self.logger.debug('adding {} curve to secondary plot'.format(name))
-            self.add_secondary_plot_line(name, (255, 255, 255))
+            self.add_secondary_plot_line(name, pen)
         self.secondary_plot_lines[name]['x'] = x
         self.secondary_plot_lines[name]['y'] = y
 
+    def plot_main_xr(self, name, dataArray,pen=(255,255,255)):
+        if name not in self.main_plot_lines.keys():
+            self.logger.debug('adding {} curve to main plot'.format(name))
+            self.add_main_plot_line(name, pen)
+
+        self.main_plot_lines[name]['x'] = dataArray.time
+        self.main_plot_lines[name]['y'] = dataArray
+        self.main_plot_lines[name]['plot'].setData(dataArray.time,dataArray)
+
+    def plot_secondary_xr(self, name, dataArray,pen=(255,255,255)):
+        if name not in self.secondary_plot_lines.keys():
+            self.logger.debug('adding {} curve to secondary plot'.format(name))
+            self.add_secondary_plot_line(name, pen)
+
+        self.secondary_plot_lines[name]['x'] = dataArray.time
+        self.secondary_plot_lines[name]['y'] = dataArray
+
     def on_clock(self):
-        try:
-            for key, val in self.main_plot_lines.items():
-                val['plot'].setData(val['x'], val['y'])
-            for key, val in self.secondary_plot_lines.items():
-                val['plot'].setData(val['x'], val['y'])
-        except:
-            pass
-            # self.logger.warning('Failed Plotting. Data:\n{}\n{}'.format(self.main_plot_lines,self.secondary_plot_lines))
+        if not self.plot_queue.empty():
+            newData = self.plot_queue.get()
+            print('plotting')
+            for key, array in newData.items():
+                if key == 'all':
+                    if 'avg' in array.dims:
+                        self.plot_main_xr('last',array[-1])
+                else:
+                    self.plot_main_xr(key,array,pen=(0,255,0))
+
+
+        # try:
+        #     for key, val in self.main_plot_lines.items():
+        #         val['plot'].setData(val['x'], val['y'])
+        #     for key, val in self.secondary_plot_lines.items():
+        #         val['plot'].setData(val['x'], val['y'])
+        # except KeyError:
+        #     pass
+        # except Exception as e:
+        #     pass
+        #     self.logger.warning('Failed Plotting. \nData:{} - {}\n Error: {}'.format(self.main_plot_lines.keys(),self.secondary_plot_lines.keys(),e))
 
 def main():
     pass

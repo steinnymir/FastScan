@@ -19,18 +19,18 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
+import logging
 import multiprocessing as mp
 import os
 import time
 
-import xarray as xr
-
 import numpy as np
+import xarray as xr
 from PyQt5 import QtCore
 
 from threads.core import Worker
 from utilities.data import bin_dc_multi, bin_dc
-import logging
+
 
 def main():
     pass
@@ -41,7 +41,6 @@ if __name__ == '__main__':
 
 
 class Processor(Worker):
-
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
 
@@ -50,8 +49,6 @@ class Processor(Worker):
         super().__init__()
         self.logger = logging.getLogger('{}.Processor'.format(__name__))
         self.logger.debug('Created Processor')
-
-
 
         self.shaker_positions = data[0]
         self.signal = data[1]
@@ -91,7 +88,9 @@ class Processor(Worker):
                 len(self.result) - len(self.output_array[1][np.isfinite(self.output_array[1])]),
                 1000 * (time.time() - t0)))
         except Exception as e:
-            self.logger.warning('failed to project data with shape {} to shape {}.\nERROR: {}'.format(self.shaker_positions.shape,self.output_array.shape,e))
+            self.logger.warning(
+                'failed to project data with shape {} to shape {}.\nERROR: {}'.format(self.shaker_positions.shape,
+                                                                                      self.output_array.shape, e))
             self.error.emit(e)
         self.finished.emit()
 
@@ -126,67 +125,86 @@ class Processor_multi(Worker):
         self.logger.debug('created processor ID:{}'.format(self.id))
         self.isReady.emit(self.id)
 
+    def project(self, n_points, signal, position_bins):
+        result = np.zeros(n_points, dtype=np.float64)
+        norm_array = np.zeros(n_points, dtype=np.float64)
+        for val, pos in zip(signal, position_bins):
+            result[pos] += val
+            norm_array[pos] += 1.
+        return result / norm_array
+
+    def project_dc(self, n_points, signal, position_bins, dark_control):
+        result = np.zeros(n_points, dtype=np.float64)
+        norm_array = np.zeros(n_points, dtype=np.float64)
+        for val, pos, dc in zip(signal, position_bins, dark_control):
+            if dc:
+                result[pos] += val
+                norm_array[pos] += 1.
+            else:
+                result[pos] -= val
+
+        return result / norm_array
+
     @QtCore.pyqtSlot()
-    def work(self, data, use_dark_control=True):
+    def work(self, stream_data, use_dark_control=True):
+        """ project data from streamer format to 1d time trace
+
+        creates bins from digitizing the stage positions measured channel of the
+        stream data. Values from the signal channel are assigned to the corresponding
+        bin from the stage positions. if Dark Control is true, values where dc
+        is true are added, while where dark control is false, it is substracted.
+
+
+
+        :param stream_data:
+        :param use_dark_control:
+        :return:
+            xarray containing projected data and relative time scale.
+
+        """
         t0 = time.time()
-        shaker_positions = data[0]
-        signal = data[1]
-        dark_control = data[2]
+        shaker_positions = stream_data[0]
+        signal = stream_data[1]
+        dark_control = stream_data[2]
 
-        step = 0.000152587890625
+        step = 0.000152587890625  # ADC step size - corresponds to .25fs
+        # consider 0.1 ps step size from shaker digitalized signal,
+        # should be considering the 2 passes through the shaker
+        step_to_time_factor = .1
         minpos = shaker_positions.min()
-        min_t = (minpos / step) * .1  # consider 0.05 ps step size from shaker digitalized signal
+        min_t = (minpos / step) * step_to_time_factor
         maxpos = shaker_positions.max()
-        max_t = (maxpos / step) * .1
-
+        max_t = (maxpos / step) * step_to_time_factor
 
         n_points = int((maxpos - minpos) / step) + 1
         time_axis = np.linspace(min_t, max_t, n_points)
 
         position_bins = np.array((shaker_positions - minpos) / step, dtype=int)
 
-
-        result = np.zeros(n_points, dtype=np.float64)
-        normamlization_array = np.zeros(n_points, dtype=np.float64)
-
-        output = xr.DataArray(np.zeros(n_points))
-
-        # output_array = np.zeros((2, n_points))
-        # output_array[0] = time_axis
-
         try:
             if use_dark_control:
-                for val, pos, dc in zip(signal, position_bins,dark_control):
-                    if dc:
-                        result[pos] += val
-                        normamlization_array[pos] += 1.
-                    else:
-                        result[pos] -= val
+                result = self.project_dc(n_points, signal, position_bins, dark_control)
             else:
-                for val, pos in zip(signal, position_bins):
-                    result[pos] += val
-                    normamlization_array[pos] += 1.
+                result = self.project(n_points, signal, position_bins)
 
-            # output_array[1] = result / normamlization_array
-
-            output = xr.DataArray(result / normamlization_array,coords={'time':time_axis},dims=('time'))
+            output = xr.DataArray(result, coords={'time': time_axis}, dims='time')
 
             self.newData.emit(output)
-            # self.logger.debug('Projected {} points to a {} pts array, with {} nans in : {:.2f} ms'.format(
-            #     len(signal), len(result),
-            #     len(result) - len(output_array[1][np.isfinite(output_array[1])]),
-            #     1000 * (time.time() - t0)))
-            self.logger.debug('progected {} points in {} ms to xarray: \n {}'.format(
-                len(signal), 1000 * (time.time() - t0),output))
+
+            self.logger.debug('Projected {} points to a {} pts array, with {} nans in : {:.2f} ms'.format(
+                len(signal), len(result),
+                len(result) - len(result[np.isfinite(result)]),
+                1000 * (time.time() - t0)))
+
         except Exception as e:
-            self.logger.warning('failed to project data with shape {} to shape {}.\nERROR: {}'.format(shaker_positions.shape,output,e))
-
+            self.logger.warning(
+                'failed to project stream_data with shape {} to shape {}.\nERROR: {}'.format(shaker_positions.shape,
+                                                                                             output.shape, e))
             self.error.emit(e)
+
         time.sleep(0.002)
-
         self.isReady.emit(self.id)
-        self.logger.debug('Processor ID:{} is ready for new data'.format(self.id))
-
+        self.logger.debug('Processor ID:{} is ready for new stream_data'.format(self.id))
 
 
 class Binner(Worker):
@@ -210,7 +228,7 @@ class Binner(Worker):
         except Exception as e:
             self.error.emit(e)
         self.logger.debug('data binned: \n\tresults: {}\tprocessing time: {}'.format(self.data_output.shape,
-                                                                              time.time() - t0))
+                                                                                     time.time() - t0))
         self.newData.emit(self.data_output)
         self.finished.emit()
 
@@ -245,4 +263,3 @@ class Binner(Worker):
 
     def bin_data(self):
         self.data_output = bin_dc(self.data_input, self.bins)
-
