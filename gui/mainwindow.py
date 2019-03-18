@@ -24,6 +24,7 @@ import time
 
 import h5py
 import numpy as np
+import xarray as xr
 import pyqtgraph as pg
 import qdarkstyle
 from PyQt5.QtCore import QTimer
@@ -40,7 +41,7 @@ from utilities.qt import SpinBox, labeled_qitem
 
 
 class FastScanMainWindow(QMainWindow):
-    _SIMULATE = True
+    _SIMULATE = False
 
     def __init__(self):
         super(FastScanMainWindow, self).__init__()
@@ -61,7 +62,7 @@ class FastScanMainWindow(QMainWindow):
 
         self.settings = {'laser_trigger_frequency': 273000,
                          'shaker_frequency': 10,
-                         'n_samples': 100000,
+                         'n_samples': 42000,
                          'shaker_amplitude': 10,
                          'n_plot_points': 15000
                          }
@@ -70,6 +71,7 @@ class FastScanMainWindow(QMainWindow):
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
+                     'dataarray':None,
                      }
 
         self._processing_tick = None
@@ -235,9 +237,9 @@ class FastScanMainWindow(QMainWindow):
         self.main_plot_widget.setMinimumHeight(450)
 
         self.plot_back_line = self.main_plot_widget.plot()
-        self.plot_back_line.setPen(pg.mkPen(100, 100, 100))
+        self.plot_back_line.setPen(pg.mkPen(100, 255, 100))
         self.plot_front_line = self.main_plot_widget.plot()
-        self.plot_front_line.setPen(pg.mkPen(100, 255, 100))
+        self.plot_front_line.setPen(pg.mkPen(100, 100, 100))
         self.plot_fit_line = self.main_plot_widget.plot()
         self.plot_fit_line.setPen(pg.mkPen(247, 211, 7))
 
@@ -322,6 +324,7 @@ class FastScanMainWindow(QMainWindow):
                      'time_axis': None,
                      'last_trace': None,
                      'all_traces': None,
+                     'dataarray':None,
                      }
 
     def make_time_axis(self):
@@ -363,11 +366,14 @@ class FastScanMainWindow(QMainWindow):
         print('stream data recieved: {} pts'.format(data.shape))
         t = time.time()
         if self._streamer_tick is not None:
-            dt = 1. / (t - self._streamer_tick)
-            if dt > 1:
-                self.label_streamer_fps.setText('streamer: {:.2f} frame/s'.format(dt))
-            else:
-                self.label_streamer_fps.setText('streamer: {:.2f} s/frame'.format(1. / dt))
+            try:
+                dt = 1. / (t - self._streamer_tick)
+                if dt > 1:
+                    self.label_streamer_fps.setText('streamer: {:.2f} frame/s'.format(dt))
+                else:
+                    self.label_streamer_fps.setText('streamer: {:.2f} s/frame'.format(1. / dt))
+            except ZeroDivisionError:
+                pass
         self._streamer_tick = t
         self.data['unprocessed'] = np.append(self.data['unprocessed'], data, axis=1)
         self.draw_raw_signal_plot(np.linspace(0, len(data[0]) / self.settings['laser_trigger_frequency'], len(data[0])),
@@ -421,11 +427,20 @@ class FastScanMainWindow(QMainWindow):
         # self.plot_back_line.setData(x=x[2:-2], y=data[2:-2])
 
         #
-        self.data['last_trace'] = data
-        if self.data['all_traces'] is None:
-            self.data['all_traces'] = []
-        self.data['all_traces'].append(data)
-        self.current_average = np.nanmean(np.array(self.data['all_traces']), axis=0)
+        time_axis = np.linspace(-self.settings['shaker_amplitude'],self.settings['shaker_amplitude'],len(data))
+
+        da = xr.DataArray(data,coords={'time':time_axis}, dims='time')
+        if self.data['dataarray'] is None:
+            self.data['dataarray'] = da
+        else:
+            self.data['dataarray'] = xr.concat([self.data['dataarray'],da],'avg')
+        #
+        #
+        # self.data['last_trace'] = data
+        # if self.data['all_traces'] is None:
+        #     self.data['all_traces'] = []
+        # self.data['all_traces'].append(data)
+        # self.current_average = np.nanmean(np.array(self.data['all_traces']), axis=0)
 
         self.draw_main_plot()
         if self.fit_sech2_checkbox.isChecked() or self.fit_sech2_checkbox.isChecked():
@@ -486,17 +501,25 @@ class FastScanMainWindow(QMainWindow):
         self.raw_data_plot.setData(x=xd, y=yd)
 
     def draw_main_plot(self):
-        if self.data['time_axis'] is None:
-            self.make_time_axis()
-        y = self.data['all_traces'][-1]
-        x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
+        # if self.data['time_axis'] is None:
+        #     self.make_time_axis()
+        # y = self.data['all_traces'][-1]
+        # # x = np.linspace(-self.settings['shaker_amplitude']/2,self.settings['shaker_amplitude']/2,len(y))
+        #
+        # print(len(x))
+        # print(len(y))
+        # # yavg = np.array(self.data['all_traces']).mean(axis=0)
+        # yavg = self.current_average
 
-        print(len(x))
-        print(len(y))
-        # yavg = np.array(self.data['all_traces']).mean(axis=0)
-        yavg = self.current_average
-        self.plot_back_line.setData(x=x[2:-2], y=y[2:-2])
-        self.plot_front_line.setData(x=x[2:-2], y=yavg[2:-2])
+
+        if 'avg' in self.data['dataarray'].dims:
+            x = np.array(self.data['dataarray'].time)
+            y = np.array(self.data['dataarray'][-1,:])
+            self.plot_back_line.setData(x=x, y=y)
+
+            yavg = np.array(self.data['dataarray'].mean('avg'))
+
+            self.plot_front_line.setData(x=x, y=yavg)
         if self.peak_fit_data is not None:
             if self.fit_sech2_checkbox.isChecked() or self.fit_gauss_checkbox.isChecked():
                 yfit = self.peak_fit_data
