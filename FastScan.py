@@ -53,7 +53,6 @@ def main():
     # Create handle prg for the Graphic Interface
     prg = FastScanMainWindow()
 
-
     # print('showing GUI')
     prg.show()
 

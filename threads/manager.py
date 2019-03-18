@@ -45,7 +45,6 @@ class ThreadManager(Worker):
     This class manages the streamer processor and fitter workers for the fast
     scan data acquisition and processing.
 
-
     """
     newStreamerData = QtCore.pyqtSignal(np.ndarray)
     newProcessedData = QtCore.pyqtSignal(dict)

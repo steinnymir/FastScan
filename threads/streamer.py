@@ -41,9 +41,9 @@ if __name__ == '__main__':
 
 class Streamer(Worker):
 
-
     finished = QtCore.pyqtSignal()
     newData = QtCore.pyqtSignal(np.ndarray)
+
     def __init__(self, n_samples, iterations=None, simulate=False, dark_control=True):
         super().__init__()
         self.logger = logging.getLogger('{}.Streamer'.format(__name__))
