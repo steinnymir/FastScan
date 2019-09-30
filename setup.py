@@ -19,28 +19,24 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-import numpy as np
-
-def gaussian(x, x0, sig):
-    return np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.)))
-
-def sech2_fwhm(x, A, x0, fwhm,c):
-    tau = fwhm*2/1.76
-    return A / (np.cosh((x-x0)/tau))**2+c
-
-def gaussian_fwhm(x, A,x0, fwhm,c):
-    sig = fwhm*2/2.355
-    return A*np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.)))+c
-
-def sin(x,A,f,p):
-    return A* np.sin(x/f + p)
+from distutils.core import setup, Extension
+from Cython.Build import cythonize
+# import py2exe
+import numpy
+import os
 
 
+extensions = [
+    Extension("fastscan.cscripts.project", [os.path.join("fastscan", "cscripts", "project.pyx")],
+        include_dirs=[numpy.get_include()]),
+]
 
-
-def main():
-    pass
-
-
-if __name__ == '__main__':
-    main()
+setup(
+    name="FastScan",
+    version='0.1.0',
+    description='Fast-scan Pump Probe software',
+    author=['Steinn Ymir Agustsson'],
+    url='https://github.com/steinnymir/FastScan',
+    packages=['distutils', 'distutils.command'],
+    ext_modules=cythonize(extensions)
+)
