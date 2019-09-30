@@ -28,7 +28,7 @@ import numpy as np
 import pyqtgraph as pg
 import qdarkstyle
 import xarray as xr
-from PyQt5 import QtGui, QtCore
+from PyQt5 import QtGui, QtCore, QtWidgets
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
 from pyqtgraph.Qt import QtCore as pQtCore, QtGui as pQtGui
 from scipy.signal import butter, filtfilt
 
-from .misc import parse_category, parse_setting, write_setting
+from .misc import parse_category, parse_setting, write_setting, NoDataException
 from .fastscan import FastScanThreadManager
 
 
@@ -49,7 +49,13 @@ class FastScanMainWindow(QMainWindow):
         self.logger.info('Created MainWindow')
 
         self.setWindowTitle('Fast Scan')
-        self.setGeometry(100, 50, 1152, 768)
+        width = parse_setting('gui','width')
+        height = parse_setting('gui','height')
+        hpos = parse_setting('gui','hpos')
+        vpos = parse_setting('gui','vpos')
+
+        self.setGeometry(hpos, vpos, width, height)
+        # self.showMaximized()
 
         self.status_bar = self.statusBar()
         self.status_bar.showMessage('ready')
@@ -61,10 +67,8 @@ class FastScanMainWindow(QMainWindow):
         pg.setConfigOptions(antialias=True)
 
         ####################################
-        #   create multiprocessing pool    #
+        #   create multiprocessing threadPool    #
         ####################################
-        self.pool = QtCore.QThreadPool()
-        self.pool.setMaxThreadCount(2)
 
 
         ##########################
@@ -73,7 +77,20 @@ class FastScanMainWindow(QMainWindow):
 
         self.settings = parse_category('fastscan')  # import all
 
-        self.data_manager, self.data_manager_thread = self.initialize_data_manager()
+        self.data_manager = FastScanThreadManager()
+        self.data_manager.newProcessedData.connect(self.on_processed_data)
+        self.data_manager.newStreamerData.connect(self.on_streamer_data)
+        self.data_manager.newFitResult.connect(self.on_fit_result)
+        self.data_manager.newAverage.connect(self.on_avg_data)
+        self.data_manager.newData.connect(self.on_new_data)
+        self.data_manager.completedIterativeMeasurement.connect(self.on_completed_iterative_measurement)
+        self.data_manager.error.connect(self.on_thread_error)
+
+        self.data_manager_thread = QtCore.QThread()
+        self.data_manager.moveToThread(self.data_manager_thread)
+        self.data_manager_thread.start()
+
+        self._popup_enabled = True
 
         self.fps_l = []
         self.streamer_qsize = 0
@@ -87,6 +104,7 @@ class FastScanMainWindow(QMainWindow):
         self.show()
 
     def setupUi(self):
+
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         central_layout = QHBoxLayout()
@@ -95,6 +113,7 @@ class FastScanMainWindow(QMainWindow):
         self.__verticalSpacer = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
 
         control_widget = self.make_controlwidget()
+
         self.visual_widget = FastScanPlotWidget()
         self.visual_widget.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         control_widget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
@@ -104,6 +123,13 @@ class FastScanMainWindow(QMainWindow):
         # main_splitter.setStretchFactor(0, 5)
 
         central_layout.addWidget(main_splitter)
+
+    def keyPressEvent(self, e):
+        if e.key() == QtCore.Qt.Key_F11:
+            if self.isMaximized():
+                self.showNormal()
+            else:
+                self.showMaximized()
 
     def make_controlwidget(self):
         widget = QWidget()
@@ -122,20 +148,17 @@ class FastScanMainWindow(QMainWindow):
         self.start_button = QPushButton('start')
         acquisition_box_layout.addWidget(self.start_button, 0, 0, 1, 1)
         self.start_button.clicked.connect(self.start_acquisition)
+        self.start_button.setEnabled(True)
+
         self.stop_button = QPushButton('stop')
         acquisition_box_layout.addWidget(self.stop_button, 0, 1, 1, 1)
         self.stop_button.clicked.connect(self.stop_acquisition)
-        # self.stop_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
 
         self.reset_button = QPushButton('reset')
         acquisition_box_layout.addWidget(self.reset_button, 1, 1, 1, 1)
         self.reset_button.clicked.connect(self.reset_data)
         self.reset_button.setEnabled(True)
-
-        self.radio_simulate = QRadioButton('Simulate')
-        self.radio_simulate.setChecked(parse_setting('fastscan', 'simulate'))
-        acquisition_box_layout.addWidget(self.radio_simulate, 1, 0, 1, 1)
-        self.radio_simulate.clicked.connect(self.toggle_simulation_mode)
 
         self.n_averages_spinbox = QSpinBox()
         self.n_averages_spinbox.setMinimum(1)
@@ -158,24 +181,15 @@ class FastScanMainWindow(QMainWindow):
 
         save_box.setLayout(savebox_layout)
         h5_dir = parse_setting('paths', 'h5_data')
-        i = 0
-        names = [x for x in os.listdir(h5_dir) if 'noname_' in x]
-        filename = ''
-        while True:
-            filename = 'noname_{:03}'.format(i)
-            if f'{filename}.h5' in names:
-                i += 1
-            else:
-                break
-        f_name = parse_setting('paths','filename')
+        f_name = parse_setting('paths', 'filename')
 
         self.save_name_ledit = QLineEdit(f_name)
-        savebox_layout.addWidget(QLabel('Name:'), 0, 0)
+        savebox_layout.addWidget(QLabel('File Name:'), 0, 0)
         savebox_layout.addWidget(self.save_name_ledit, 0, 1)
         self.save_name_ledit.editingFinished.connect(self.update_savename)
 
         self.save_dir_ledit = QLineEdit(h5_dir)
-        savebox_layout.addWidget(QLabel('dir :'), 1, 0)
+        savebox_layout.addWidget(QLabel('Directory:'), 1, 0)
         savebox_layout.addWidget(self.save_dir_ledit, 1, 1)
         self.save_dir_ledit.editingFinished.connect(self.update_savedir)
 
@@ -244,11 +258,6 @@ class FastScanMainWindow(QMainWindow):
         self.shaker_gain_combobox.activated[str].connect(set_shaker_gain)
         settings_box_layout.addWidget(QLabel('Shaker Gain'), 1, 0)
         settings_box_layout.addWidget(self.shaker_gain_combobox, 1, 1)
-
-        self.radio_dark_control = QRadioButton('Dark Control')
-        self.radio_dark_control.setChecked(parse_setting('fastscan', 'dark_control'))
-        settings_box_layout.addWidget(self.radio_dark_control)
-        self.radio_dark_control.clicked.connect(self.toggle_darkcontrol_mode)
 
         # self.filter_frequency_spinbox.setMaximum(1.)
         # self.filter_frequency_spinbox.setMinimum(0.0)
@@ -378,6 +387,7 @@ class FastScanMainWindow(QMainWindow):
         write_setting(name,'paths','h5_data')
 
     def start_iterative_measurement(self):
+        self._popup_enabled = False
         temperatures = [float(x) for x in self.im_temperatures.text().split(',')]
         savename = os.path.join(self.im_save_dir.text(), self.im_save_name.text())
         self.data_manager.start_iterative_measurement(temperatures, savename)
@@ -406,28 +416,6 @@ class FastScanMainWindow(QMainWindow):
 
         )
         self.datasize_label.setText(string)
-
-    def initialize_data_manager(self):
-
-        manager = FastScanThreadManager()
-        manager.newProcessedData.connect(self.on_processed_data)
-        manager.newStreamerData.connect(self.on_streamer_data)
-        manager.newFitResult.connect(self.on_fit_result)
-        manager.newAverage.connect(self.on_avg_data)
-        manager.newData.connect(self.on_new_data)
-        manager.error.connect(self.on_thread_error)
-
-        manager_thread = QtCore.QThread()
-        manager.moveToThread(manager_thread)
-        manager_thread.start()
-
-        return manager, manager_thread
-
-    def toggle_simulation_mode(self):
-        write_setting(self.radio_simulate.isChecked(), 'fastscan', 'simulate')
-
-    def toggle_darkcontrol_mode(self):
-        write_setting(self.radio_simulate.isChecked(), 'fastscan', 'dark_control')
 
     def toggle_calculate_autocorrelation(self):
         self.data_manager._calculate_autocorrelation = self.calculate_autocorrelation_box.isChecked()
@@ -486,10 +474,9 @@ class FastScanMainWindow(QMainWindow):
         # def f(da,resample):
         #     return da[:,::resample]
         # runnable = Runnable(f,data,2)
-        # self.pool.start(runnable)
+        # self.threadPool.start(runnable)
         # runnable.signals.result.connect(self.visual_widget.plot_stream_curve)
         self.visual_widget.plot_stream_curve(data)
-
 
     def  apply_filter(self, data_array):
         if self.butter_filter_checkbox.isChecked():
@@ -500,11 +487,15 @@ class FastScanMainWindow(QMainWindow):
                 pass
 
     def start_acquisition(self):
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
         # self.data_manager.create_streamer()
         self.status_bar.showMessage('Acquisition started')
         self.data_manager.start_streamer()
 
     def stop_acquisition(self):
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
         self.status_bar.showMessage('Acquisition Stopped')
         self.data_manager.stop_streamer()
 
@@ -521,12 +512,102 @@ class FastScanMainWindow(QMainWindow):
         self.data_manager.n_averages = val
 
     def save_data(self):
+        self.logger.debug('Saving data...')
 
         dir = self.save_dir_ledit.text()
         filename = self.save_name_ledit.text()
         filepath = os.path.join(dir, filename)
-        self.data_manager.save_data(filepath, all_data=self.save_all_cb.isChecked())
-        self.status_bar.showMessage('Successfully saved data as {}'.format(filepath))
+        filepath += '.h5'
+
+        try:
+            self.data_manager.save_data(filepath, all_data=self.save_all_cb.isChecked())
+            self.status_bar.showMessage('Successfully saved data as {}'.format(filepath))
+        except NotADirectoryError:
+            self.logger.debug('Directory "{}" not found'.format(dir))
+            reply = QtWidgets.QMessageBox.question(self,
+                                                   'No directory {}\nCreate it?'.format(dir),
+                                                   QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                                                   QtWidgets.QMessageBox.Yes)
+            if reply == QtWidgets.QMessageBox.Yes:
+                self.logger.debug('Directory {} created'.format(dir))
+                os.mkdir(dir)
+                self.save_data() # restart saving procedure
+            else:
+                self.logger.debug('Cancelled saving'.format(dir))
+
+        except FileExistsError:
+            text, okPressed = QtWidgets.QInputDialog.getText(self,
+                                                             'File Exists Error',
+                                                             'File {} already exists! need to set a new name.'.format(filepath),
+                                                             QLineEdit.Normal,
+                                                             filename)
+            if okPressed and text != '':
+                self.save_name_ledit.setText(text)
+                self.save_data()
+            #
+            # self.logger.debug('File {} already exists! need to set a new name.'.format(filepath))
+            # errorDialog = QtWidgets.QMessageBox()
+            # errorDialog.setText('File {} already exists! Please change name.'.format(filepath))
+            # errorDialog.setIcon(QtWidgets.QMessageBox.Warning)
+            # errorDialog.setStandardButtons(QtWidgets.QMessageBox.Ok)
+            # errorDialog.exec_()
+            # self.logger.debug('Saving aborted'.format(dir))
+
+        except NoDataException:
+            self.logger.debug('Attempting to save nothing...'.format(filepath))
+            errorDialog = QtWidgets.QMessageBox()
+            errorDialog.setText('No data to save...')
+            errorDialog.setIcon(QtWidgets.QMessageBox.Warning)
+            errorDialog.setStandardButtons(QtWidgets.QMessageBox.Ok)
+            errorDialog.exec_()
+
+        except Exception as e:
+            raise e
+
+        #
+        #
+        # abort = False
+        # if not os.path.isdir(dir):
+        #     self.logger.debug('Directory {} not found'.format(dir))
+        #     reply = QtWidgets.QMessageBox.question(self,
+        #                                            'No directory {}\nCreate it?'.format(dir),
+        #                                            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        #                                            QtWidgets.QMessageBox.No)
+        #     if reply == QtWidgets.QMessageBox.Yes:
+        #         self.logger.debug('Directory {} created'.format(dir))
+        #         os.mkdir(dir)
+        #     else:
+        #         self.logger.debug('Cancelled saving'.format(dir))
+        #
+        #         abort = True
+        #
+        # if not abort:
+        #     if os.path.isfile(filepath):
+        #         self.logger.debug('File {} already exists! need to set a new name.'.format(filepath))
+        #         errorDialog = QtWidgets.QMessageBox()
+        #         errorDialog.setText('File {} already exists! Please change name.'.format(filepath))
+        #         errorDialog.setIcon(QtWidgets.QMessageBox.Warning)
+        #         errorDialog.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        #         errorDialog.exec_()
+        #         self.logger.debug('Saving aborted'.format(dir))
+        #
+        #     else:
+        #         if self._popup_enabled:
+        #             errorDialog = QtWidgets.QMessageBox()
+        #             errorDialog.setText('Data saved as {}'.format(filepath))
+        #             errorDialog.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        #             errorDialog.exec_()
+        #         self.data_manager.save_data(filepath, all_data=self.save_all_cb.isChecked())
+        #         self.status_bar.showMessage('Successfully saved data as {}'.format(filepath))
+
+    @QtCore.pyqtSlot()
+    def on_completed_iterative_measurement(self):
+        self._popup_enabled = True
+        infoBox = QtWidgets.QMessageBox()
+        infoBox.setText('Iterative measurement completed!')
+        infoBox.setIcon(QtWidgets.QMessageBox.Info)
+        infoBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        infoBox.exec_()
 
     @QtCore.pyqtSlot(Exception)
     def on_thread_error(self, e):
@@ -538,6 +619,16 @@ class FastScanMainWindow(QMainWindow):
         self.logger.info('Closing window: terminating all threads.')
         self.data_manager.close()
         self.data_manager_thread.exit()
+
+    def resizeEvent(self,event):
+        write_setting(event.size().width(),'gui','width')
+        write_setting(event.size().height(),'gui','height')
+
+
+    def moveEvent(self, event):
+        write_setting(event.pos().x(), 'gui','hpos')
+        write_setting(event.pos().y(), 'gui','vpos')
+
 
 
 class FastScanPlotWidget(QWidget):

@@ -151,3 +151,8 @@ def sech2_fwhm(x, A, x0, fwhm, c):
     tau = fwhm * 2 / 1.76
     return A / (np.cosh((x - x0) / tau)) ** 2 + c
 
+# -------------------------
+# exceptions
+# -------------------------
+class NoDataException(Exception):
+    pass
