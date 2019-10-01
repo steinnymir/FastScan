@@ -43,7 +43,7 @@ except:
 from scipy.optimize import curve_fit
 
 # from instruments.cryostat import ITC503s as Cryostat
-from .misc import sech2_fwhm, sin, update_average  # , gaussian_fwhm, gaussian, transient_1expdec,
+from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fwhm, gaussian, transient_1expdec
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
@@ -112,7 +112,7 @@ class FastScanThreadManager(QtCore.QObject):
         self.fast_timer.start()
 
         self.slow_timer = QtCore.QTimer()
-        self.slow_timer.setInterval(100)
+        self.slow_timer.setInterval(200)
         self.slow_timer.timeout.connect(self.on_slow_timer)
         self.slow_timer.start()
 
@@ -245,7 +245,7 @@ class FastScanThreadManager(QtCore.QObject):
         self.newAverage.emit(da)
 
         if self._calculate_autocorrelation:
-            runnable = Runnable(fit_autocorrelation, da, expected_pulse_duration=.1)
+            runnable = Runnable(fit_autocorrelation_wings, da, expected_pulse_duration=.1)
             self.threadPool.start(runnable)
             runnable.signals.result.connect(self.newFitResult.emit)
 
@@ -1068,6 +1068,11 @@ class FastScanStreamer(QtCore.QObject):
                           sim_parameters['fwhm'],
                           sim_parameters['offset']
                           ]
+        if sim_parameters['function'] == 'sech2_fwhm_wings':
+            fit_parameters.append(sim_parameters['wing_sep']*sim_parameters['fwhm'])
+            fit_parameters.append(sim_parameters['wing_ratio'])
+            fit_parameters.append(sim_parameters['wing_n'])
+
         step = parse_setting('fastscan', 'shaker_position_step')
         ps_per_step = parse_setting('fastscan', 'shaker_ps_per_step')  # ADC step size - corresponds to 25fs
         ps_per_step *= parse_setting('fastscan', 'shaker_gain')  # correct for shaker gain factor
@@ -1078,7 +1083,7 @@ class FastScanStreamer(QtCore.QObject):
             t0 = time.time()
 
             self.data = simulate_measure(self.data,
-                                         # function=sim_parameters['function'],
+                                         function=sim_parameters['function'],
                                          args=fit_parameters,
                                          amplitude=sim_parameters['shaker_amplitude'],
                                          mode=self.acquisition_mode,
@@ -1095,15 +1100,38 @@ class FastScanStreamer(QtCore.QObject):
                                                       self.data.shape))
 
 
-def simulate_measure(data, args=[.5, -2, .085, 1],
+def simulate_measure(data, function='sech2_fwhm', args=[.5, -2, .085, 1],
                      amplitude=10, mode='triggered',
                      step=0.000152587890625, ps_per_step=.05):
     args_ = args[:]
 
-    f = sech2_fwhm
-    args_[1] *= step / ps_per_step  # transform ps to voltage
-    args_[2] *= step / ps_per_step  # transform ps to voltage
-
+    if function == 'gauss_fwhm':
+        f = gaussian_fwhm
+        args_[1] *= step / ps_per_step  # transform ps to voltage
+        args_[2] *= step / ps_per_step  # transform ps to voltage
+    elif function == 'gaussian':
+        f = gaussian
+        args_[1] *= step / ps_per_step  # transform ps to voltage
+        args_[2] *= step / ps_per_step  # transform ps to voltage
+        args_.pop(0)
+        args_.pop(-1)
+    elif function == 'sech2_fwhm':
+        f = sech2_fwhm
+        args_[1] *= step / ps_per_step  # transform ps to voltage
+        args_[2] *= step / ps_per_step  # transform ps to voltage
+    elif function == 'sech2_fwhm_wings':
+        f = sech2_fwhm_wings
+        args_[1] *= step / ps_per_step  # transform ps to voltage
+        args_[2] *= step / ps_per_step  # transform ps to voltage
+    elif function == 'transient_1expdec':
+        f = transient_1expdec
+        args_ = [2, 20, 1, 1, .01, -10]
+        args_[1] *= step / ps_per_step  # transform ps to voltage
+        args_[2] *= step / ps_per_step  # transform ps to voltage
+        args_[5] *= step / ps_per_step  # transform ps to voltage
+    else:
+        raise NotImplementedError('no funcion called {}, please use gauss or sech2'.format(function))
+    #########
     n = np.arange(len(data[0]))
     noise = np.random.rand(len(n))
     if mode == 'continuous':

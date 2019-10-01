@@ -24,7 +24,6 @@ import os
 import time
 
 import numpy as np
-import pyqtgraph as pg
 import qdarkstyle
 import xarray as xr
 from PyQt5 import QtGui, QtCore, QtWidgets
@@ -33,6 +32,8 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
     QLineEdit, QComboBox, QSizePolicy, \
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QPushButton, QGridLayout, QSpinBox, QLabel
+
+import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore as pQtCore, QtGui as pQtGui
 from scipy.signal import butter, filtfilt
 
@@ -59,16 +60,17 @@ class FastScanMainWindow(QMainWindow):
 
         self.status_bar = self.statusBar()
         self.status_bar.showMessage('ready')
-        # set the cool dark theme and other plotting settings
+        #######################################################
+        # set the cool dark theme and other plotting settings #
+        #######################################################
         self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+        # self.setStyleSheet("QLabel {font: 12pt}")
+
+        # self.setStyleSheet('QWidget {font: "Arial"}')
 
         pg.setConfigOption('background', (25, 35, 45))
-        pg.setConfigOption('foreground', 'w')
+        pg.setConfigOption('foreground', (255, 255, 255))#'w')
         pg.setConfigOptions(antialias=True)
-
-        ####################################
-        #   create multiprocessing threadPool    #
-        ####################################
 
         ##########################
         #   define attributes    #
@@ -164,7 +166,6 @@ class FastScanMainWindow(QMainWindow):
         self.n_averages_spinbox.setMaximum(999999)
 
         self.n_averages_spinbox.setValue(parse_setting('fastscan', 'n_averages'))
-        # self.n_averages_spinbox.valueChanged[int].connect(self.set_n_averages)
         self.n_averages_spinbox.valueChanged[int].connect(lambda x: write_setting(x, 'fastscan', 'n_averages'))
 
         acquisition_box_layout.addWidget(QLabel('Averages: '), 2, 0, 1, 1)
@@ -626,27 +627,32 @@ class FastScanPlotWidget(QWidget):
         super(FastScanPlotWidget, self).__init__()
         self.logger = logging.getLogger('-.{}.PlotWidget'.format(__name__))
         self.logger.info('Created PlotWidget')
+        self.make_layout()
+
         self.curve_std, self.avg_std, self.avg_max = 1, 1, 1
+        self.use_r0 = parse_setting('fastscan', 'use_r0')
+
         self.clock = QTimer()
         self.clock.setInterval(1000. / 30)
         self.clock.timeout.connect(self.on_clock)
         self.clock.start()
 
         self.curves = {}
-        self.use_r0 = parse_setting('fastscan', 'use_r0')
 
+
+    def make_layout(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
         self.main_plot_widget = pg.PlotWidget(name='main_plot')
+
         self.main_plot = self.main_plot_widget.getPlotItem()
-        self.setup_plot_widget(self.main_plot_widget, title='Main')
-        self.main_plot_widget.showAxis('top', True)
-        self.main_plot_widget.showAxis('right', True)
-        self.main_plot_widget.showGrid(True, True, .2)
-        self.main_plot_widget.setLabel('left', '<font>&Delta;R</font>', units='V')
-        self.main_plot_widget.setLabel('left', '<font>&Delta;R / R</font>', units='%')
-        self.main_plot_widget.setLabel('bottom', 'Time', units='s')
+        self.main_plot.showAxis('top', True)
+        self.main_plot.showAxis('right', True)
+        self.main_plot.showGrid(True, True, .2)
+        self.main_plot.setLabel('left', '<font>&Delta;R</font>', units='V')
+        self.main_plot.setLabel('left', '<font>&Delta;R / R</font>', units='%')
+        self.main_plot.setLabel('bottom', 'Time', units='s')
         self.main_plot.disableAutoRange()
 
         self.main_plot_ranges = {'Xr_min': [],
@@ -656,87 +662,86 @@ class FastScanPlotWidget(QWidget):
 
         self.small_plot_widget = pg.PlotWidget(name='stream_plot')
         self.small_plot = self.small_plot_widget.getPlotItem()
-        self.setup_plot_widget(self.small_plot_widget, title='Stream')
-        self.small_plot_widget.showAxis('top', True)
-        self.small_plot_widget.showAxis('right', True)
-        self.small_plot_widget.showGrid(True, True, .2)
-        self.small_plot_widget.setLabel('left', 'Value', units='V')
-        self.small_plot_widget.setLabel('bottom', 'Time', units='samples')
+        # self.setup_plot_widget(self.small_plot_widget, title='Stream')
+        self.small_plot.showAxis('top', True)
+        self.small_plot.showAxis('right', True)
+        self.small_plot.showGrid(True, True, .2)
+        self.small_plot.setLabel('left', 'Value', units='V')
+        self.small_plot.setLabel('bottom', 'Time', units='samples')
 
-        # self.small_plot_widget.setMinimumHeight(int(h * .7))
         self.small_plot_widget.setMaximumWidth(400)
         self.small_plot_widget.setMinimumWidth(200)
 
-        controls = QGroupBox('Plot Settings')
-        controls_layout = QGridLayout()
-        controls.setLayout(controls_layout)
+        curve_list = QGroupBox('Curves')
+        curve_list_layout = QVBoxLayout()
+        curve_list.setLayout(curve_list_layout)
 
         self.cb_last_curve = QCheckBox('last curve')
-        controls_layout.addWidget(self.cb_last_curve, 0, 0)
-        self.cb_last_curve.setChecked(True)
+        curve_list_layout.addWidget(self.cb_last_curve)
+        self.cb_last_curve.setChecked(False)
         self.cb_avg_curve = QCheckBox('average curve')
-        controls_layout.addWidget(self.cb_avg_curve, 1, 0)
-        self.cb_avg_curve.setChecked(False)
-
+        curve_list_layout.addWidget(self.cb_avg_curve)
+        self.cb_avg_curve.setChecked(True)
         self.cb_fit_curve = QCheckBox('fit curve')
-        controls_layout.addWidget(self.cb_fit_curve, 2, 0)
+        curve_list_layout.addWidget(self.cb_fit_curve)
         self.cb_fit_curve.setChecked(True)
 
+        controls = QGroupBox('Plot Settings')
+        controls_layout = QVBoxLayout()
+        controls.setLayout(controls_layout)
+
         self.cb_remove_baseline = QCheckBox('Remove Baseline')
-        controls_layout.addWidget(self.cb_remove_baseline, 0, 1)
+        controls_layout.addWidget(self.cb_remove_baseline)
         self.cb_remove_baseline.setChecked(True)
 
         self.avg_side_cutoff = QSpinBox()
-        controls_layout.addWidget(QLabel('Side Cutoff:'), 1, 1)
-
-        controls_layout.addWidget(self.avg_side_cutoff, 1, 2)
         self.avg_side_cutoff.setValue(5)
         self.avg_side_cutoff.setMinimum(0)
+        w = QWidget()
+        l = QHBoxLayout()
+        w.setLayout(l)
+        l.addWidget(QLabel('Side Cutoff:'))
+        l.addWidget(self.avg_side_cutoff)
+        l.addStretch()
+        controls_layout.addWidget(w)
 
         self.noise_label = QLabel('Noise Floor: 0')
-        controls_layout.addWidget(self.noise_label, 2, 1)
+        controls_layout.addWidget(self.noise_label)
 
         self.cb_autoscale = QCheckBox('Autoscale')
-        controls_layout.addWidget(self.cb_autoscale, 3, 1)
+        controls_layout.addWidget(self.cb_autoscale)
         self.cb_autoscale.setChecked(True)
 
         # --------- curves -----------#
 
-        self.last_curve = self.main_plot_widget.plot(name='last')
+        self.last_curve = self.main_plot.plot(name='last')
         self.last_curve.setPen((pg.mkPen(200, 200, 200)))
-        self.avg_curve = self.main_plot_widget.plot(name='avg')
+        self.avg_curve = self.main_plot.plot(name='avg')
         self.avg_curve.setPen((pg.mkPen(100, 255, 100)))
-        self.fit_curve = self.main_plot_widget.plot(name='fit')
+        self.fit_curve = self.main_plot.plot(name='fit')
         self.fit_curve.setPen((pg.mkPen(255, 100, 100)))
 
-        # downsampling_args = (1,False,'subsample')
-        self.stream_curve = self.small_plot_widget.plot()
+        self.stream_curve = self.small_plot.plot()
         self.stream_curve.setPen((pg.mkPen(255, 100, 100)))
-        # self.stream_curve.setDownsampling(*downsampling_args)
-        self.stream_signal_dc0 = self.small_plot_widget.plot()
+        self.stream_signal_dc0 = self.small_plot.plot()
         self.stream_signal_dc0.setPen((pg.mkPen(100, 255, 100)))
-        # self.stream_signal_dc0.setDownsampling(*downsampling_args)
-
-        self.stream_signal_dc1 = self.small_plot_widget.plot()
+        self.stream_signal_dc1 = self.small_plot.plot()
         self.stream_signal_dc1.setPen((pg.mkPen(100, 100, 255)))
-        # self.stream_signal_dc1.setDownsampling(*downsampling_args)
+
+
+        curve_list_layout.addStretch()
+        controls_layout.addStretch()
 
         vsplitter = pQtGui.QSplitter(pQtCore.Qt.Vertical)
+        vpslitter.
         hsplitter = pQtGui.QSplitter(pQtCore.Qt.Horizontal)
         vsplitter.addWidget(self.main_plot_widget)
         vsplitter.addWidget(hsplitter)
+        hsplitter.addWidget(curve_list)
         hsplitter.addWidget(controls)
         hsplitter.addWidget(self.small_plot_widget)
 
         layout.addWidget(vsplitter)
-
-    def setup_plot_widget(self, plot_widget, title='Plot'):
-        plot_widget.showAxis('top', True)
-        plot_widget.showAxis('right', True)
-        plot_widget.showGrid(True, True, .2)
-        plot_widget.setLabel('left', 'Value', units='V')
-        plot_widget.setLabel('bottom', 'Time', units='s')
-        # plot_widget.setLabel('top', title)
 
     def resizeEvent(self, event):
         h = self.frameGeometry().height()
@@ -745,7 +750,7 @@ class FastScanPlotWidget(QWidget):
         self.main_plot_widget.setMinimumWidth(500)
 
     def add_curve(self, name, color=(255, 255, 255)):
-        self.curves[name] = self.main_plot_widget.plot(name=name)
+        self.curves[name] = self.main_plot.plot(name=name)
         self.curves[name].setPen((pg.mkPen(*color)))
 
     def draw_curve(self, name, da):
@@ -756,9 +761,6 @@ class FastScanPlotWidget(QWidget):
             else:
                 self.main_plot_widget.setLabel('left', '<font>&Delta;R</font>', units='V')
                 self.curves[name].setData(da.time * 10 ** -12, da)
-
-    # def plot_curve(self, name, da):
-    #     self.curves[]
 
     def plot_last_curve(self, da):
 

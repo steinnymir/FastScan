@@ -151,6 +151,34 @@ def sech2_fwhm(x, A, x0, fwhm, c):
     tau = fwhm * 2 / 1.76
     return A / (np.cosh((x - x0) / tau)) ** 2 + c
 
+def sech2_fwhm_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio, wings_n):
+    """ sech squared with n wings."""
+    res = sech2_fwhm(x, a, xc, fwhm, off)
+    for n in range(1, wings_n):
+        res += sech2_fwhm(x, a * (wing_ratio ** n), xc - n * wing_sep, fwhm, off)
+        res += sech2_fwhm(x, a * (wing_ratio ** n), xc + n * wing_sep, fwhm, off)
+
+    return res/wings_n
+
+def gaussian(x, mu, sig):
+    return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+
+def gaussian_fwhm(x, A, x0, fwhm, c):
+    sig = fwhm * 2 / 2.355
+    return A * np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.))) + c
+def transient_1expdec(t, A1, tau1, sigma, y0, off, t0):
+    """ Fitting function for transients, 1 exponent decay.
+    A: Amplitude
+    Tau: exp decay
+    sigma: pump pulse duration
+    y0: whole curve offset
+    off: slow dynamics offset"""
+    t = t - t0
+    tmp = erf((sigma ** 2. - 5.545 * tau1 * t) / (2.7726 * sigma * tau1))
+    tmp = .5 * (1 - tmp) * np.exp(sigma ** 2. / (11.09 * tau1 ** 2.))
+    return y0 + tmp * (A1 * (np.exp(-t / tau1)) + off)
+
+
 # -------------------------
 # exceptions
 # -------------------------
