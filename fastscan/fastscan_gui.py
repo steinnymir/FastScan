@@ -733,7 +733,6 @@ class FastScanPlotWidget(QWidget):
         controls_layout.addStretch()
 
         vsplitter = pQtGui.QSplitter(pQtCore.Qt.Vertical)
-        vpslitter.
         hsplitter = pQtGui.QSplitter(pQtCore.Qt.Horizontal)
         vsplitter.addWidget(self.main_plot_widget)
         vsplitter.addWidget(hsplitter)
