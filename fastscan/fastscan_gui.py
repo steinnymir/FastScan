@@ -24,6 +24,7 @@ import os
 import time
 
 import numpy as np
+import pyqtgraph as pg
 import qdarkstyle
 import xarray as xr
 from PyQt5 import QtGui, QtCore, QtWidgets
@@ -32,8 +33,6 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
     QLineEdit, QComboBox, QSizePolicy, \
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QPushButton, QGridLayout, QSpinBox, QLabel
-
-import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore as pQtCore, QtGui as pQtGui
 from scipy.signal import butter, filtfilt
 
@@ -126,6 +125,7 @@ class FastScanMainWindow(QMainWindow):
         central_layout.addWidget(main_splitter)
 
     def keyPressEvent(self, e):
+        """ Manage Hotkeys"""
         if e.key() == QtCore.Qt.Key_F11:
             if self.isMaximized():
                 self.showNormal()
@@ -375,20 +375,24 @@ class FastScanMainWindow(QMainWindow):
 
         return widget
 
+    @QtCore.pyqtSlot()
     def update_savename(self):
         name = self.save_name_ledit.text()
         write_setting(name, 'paths', 'filename')
 
+    @QtCore.pyqtSlot()
     def update_savedir(self):
         name = self.save_dir_ledit.text()
         write_setting(name, 'paths', 'h5_data')
 
+    @QtCore.pyqtSlot()
     def start_iterative_measurement(self):
         self._popup_enabled = False
         temperatures = [float(x) for x in self.im_temperatures.text().split(',')]
         savename = os.path.join(self.im_save_dir.text(), self.im_save_name.text())
         self.data_manager.start_iterative_measurement(temperatures, savename)
 
+    @QtCore.pyqtSlot()
     def on_main_clock(self):
         # self.main_clock.setInterval(self.autosave_timeout.value())
         try:
@@ -413,9 +417,11 @@ class FastScanMainWindow(QMainWindow):
         )
         self.datasize_label.setText(string)
 
+    @QtCore.pyqtSlot()
     def toggle_calculate_autocorrelation(self):
         self.data_manager._calculate_autocorrelation = self.calculate_autocorrelation_box.isChecked()
 
+    @QtCore.pyqtSlot()
     def on_shaker_calib(self):
         self.data_manager.calibrate_shaker(self.shaker_calib_iterations.value(), self.shaker_calib_integration.value())
 
@@ -465,6 +471,7 @@ class FastScanMainWindow(QMainWindow):
         # else:
         #     pass
 
+    @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, data):
         # assert isinstance(data,np.array)
         # self.logger.debug('calculating plotting streamer data')
@@ -475,6 +482,7 @@ class FastScanMainWindow(QMainWindow):
         # runnable.signals.result.connect(self.visual_widget.plot_stream_curve)
         self.visual_widget.plot_stream_curve(data)
 
+    @QtCore.pyqtSlot()
     def apply_filter(self, data_array):
         if self.butter_filter_checkbox.isChecked():
             try:
@@ -483,6 +491,7 @@ class FastScanMainWindow(QMainWindow):
             except:
                 pass
 
+    @QtCore.pyqtSlot()
     def start_acquisition(self):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
@@ -490,17 +499,20 @@ class FastScanMainWindow(QMainWindow):
         self.status_bar.showMessage('Acquisition started')
         self.data_manager.start_streamer()
 
+    @QtCore.pyqtSlot()
     def stop_acquisition(self):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.status_bar.showMessage('Acquisition Stopped')
         self.data_manager.stop_streamer()
 
+    @QtCore.pyqtSlot()
     def reset_data(self):
         self.status_bar.showMessage('Data reset')
         self.fps_l = []
         self.data_manager.reset_data()
 
+    @QtCore.pyqtSlot()
     def set_n_samples(self, var):
         self.data_manager.n_samples = var
 
@@ -508,6 +520,7 @@ class FastScanMainWindow(QMainWindow):
     def set_n_averages(self, val):
         self.data_manager.n_averages = val
 
+    @QtCore.pyqtSlot()
     def save_data(self):
         self.logger.debug('Saving data...')
 
@@ -622,7 +635,7 @@ class FastScanMainWindow(QMainWindow):
 
 
 class FastScanPlotWidget(QWidget):
-
+    """ Class to manage the plotting section of the GUI."""
     def __init__(self):
         super(FastScanPlotWidget, self).__init__()
         self.logger = logging.getLogger('-.{}.PlotWidget'.format(__name__))
@@ -632,16 +645,21 @@ class FastScanPlotWidget(QWidget):
         self.curve_std, self.avg_std, self.avg_max = 1, 1, 1
         self.use_r0 = parse_setting('fastscan', 'use_r0')
         self._scale_follow = False
+        self._main_plot_ranges = {'Xr_min': [],
+                                 'Xr_max': [],
+                                 'Yr_min': [],
+                                 'Yr_max': []}
 
         self.clock = QTimer()
         self.clock.setInterval(1000. / 30)
-        self.clock.timeout.connect(self.on_clock)
+        self.clock.timeout.connect(self._on_clock)
         self.clock.start()
 
         self.curves = {}
 
 
     def make_layout(self):
+        """ take care of the gui layout."""
         layout = QVBoxLayout()
         self.setLayout(layout)
 
@@ -666,6 +684,8 @@ class FastScanPlotWidget(QWidget):
 
         self.main_plot_widget = pg.PlotWidget(name='main_plot')
         self.main_plot_widget.setBackground((25,25,25))
+        self.main_plot_widget.setAntialiasing(True)
+
         layout_mpf.addWidget(self.main_plot_widget)
         layout_mpf.addWidget(btn_area)
 
@@ -676,25 +696,20 @@ class FastScanPlotWidget(QWidget):
         self.main_plot.setLabel('left', '<font>&Delta;R</font>', units='V')
         self.main_plot.setLabel('left', '<font>&Delta;R / R</font>', units='%')
         self.main_plot.setLabel('bottom', 'Time', units='s')
-
         self.set_autoscale()
 
-        self.main_plot_ranges = {'Xr_min': [],
-                                 'Xr_max': [],
-                                 'Yr_min': [],
-                                 'Yr_max': []}
-
         self.small_plot_widget = pg.PlotWidget(name='stream_plot')
+        self.small_plot_widget.setMaximumWidth(400)
+        self.small_plot_widget.setMinimumWidth(200)
+
         self.small_plot = self.small_plot_widget.getPlotItem()
-        # self.setup_plot_widget(self.small_plot_widget, title='Stream')
         self.small_plot.showAxis('top', True)
         self.small_plot.showAxis('right', True)
         self.small_plot.showGrid(True, True, .2)
         self.small_plot.setLabel('left', 'Value', units='V')
         self.small_plot.setLabel('bottom', 'Time', units='samples')
 
-        self.small_plot_widget.setMaximumWidth(400)
-        self.small_plot_widget.setMinimumWidth(200)
+
 
         curve_list = QGroupBox('Curves')
         curve_list_layout = QVBoxLayout()
@@ -746,16 +761,25 @@ class FastScanPlotWidget(QWidget):
         layout.addWidget(vsplitter)
 
     def resizeEvent(self, event):
+        """ Impose gemometry to optimize plot window size."""
         h = self.frameGeometry().height()
         w = self.frameGeometry().width()
         self.main_plot_frame.setMinimumHeight(int(h * .7))
         self.main_plot_frame.setMinimumWidth(500)
 
     def add_curve(self, name, *args, **kwargs):
+        """ Append a plotItem to the list of curves for the main plot."""
         self.curves[name] = self.main_plot.plot(name=name)
         self.curves[name].setPen(*args, **kwargs)
 
     def draw_curve(self, name, da):
+        """ Set data to the indicated curve
+
+        :param name: str
+            name of the curve
+        :param da: xr.DataArray
+            data to set
+        """
         if name in self.curves:
             if self.use_r0:
                 self.main_plot.setLabel('left', '<font>&Delta;R / R</font>', units='')
@@ -764,57 +788,53 @@ class FastScanPlotWidget(QWidget):
                 self.main_plot.setLabel('left', '<font>&Delta;R</font>', units='V')
                 self.curves[name].setData(da.time * 10 ** -12, da)
 
+    @QtCore.pyqtSlot()
     def plot_last_curve(self, da):
-
+        """ Plots data from the last available projected dataset"""
         if self.cb_last_curve.isChecked():
             if 'last' not in self.curves:
                 self.add_curve('last', color=(200, 200, 200),alpha=.1)
-            off = self.avg_side_cutoff.value() + 1
-            n_prepump = len(da) // 20  # .shape[0]//20
-            # self.curve_std = np.std(da.values[off:n_prepump])
             if self.cb_remove_baseline.isChecked():
-                off = da[:n_prepump].mean()
-                da -= off
-
+                da = self._remove_baseline(da)
             self.draw_curve('last', da)
         else:
             if 'last' in self.curves:
                 self.main_plot.removeItem(self.curves.pop('last'))
 
+    @QtCore.pyqtSlot()
     def plot_avg_curve(self, da):
+        """ Plots data from the last available averaged dataset"""
         if self.cb_avg_curve.isChecked():
             if 'avg' not in self.curves:
                 self.add_curve('avg', color=(255, 100, 100), width=2)
-
-            off = self.avg_side_cutoff.value() + 1
-            da_ = da[off:-off]
-            # print(da.shape, da_.shape)
-            n_prepump = len(da_) // 20 + off  # .shape[0]//20
-            self.avg_std = np.std(da_.values[:n_prepump])
-            # self.avg_max = max(np.max(da_.values),-np.max(da_.values))
+            da = self._cut_edges(da)
             if self.cb_remove_baseline.isChecked():
-                off = da_[off:n_prepump].mean()
-                da_ -= off
-            self.draw_curve('avg', da_)
+                da = self._remove_baseline(da)
+            self._calculate_noise_floor(da)
+            self.draw_curve('avg', da) # plot the curve
         else:
             if 'avg' in self.curves:
                 self.main_plot.removeItem(self.curves.pop('avg'))
 
+    @QtCore.pyqtSlot()
     def plot_fit_curve(self, da):
+        """ Plots data from the last available Fit curve dataset"""
+
         if self.cb_fit_curve.isChecked():
             if 'fit' not in self.curves:
                 self.add_curve('fit', color=(100, 255, 100))
             if self.cb_remove_baseline.isChecked():
-                n = len(da) // 20  # .shape[0]//20
-                off = da[:n].mean()
-                da -= off
+                da = self._remove_baseline(da)
             self.draw_curve('fit', da)
         else:
             if 'fit' in self.curves:
                 self.main_plot.removeItem(self.curves.pop('fit'))
 
+    @QtCore.pyqtSlot()
     def plot_stream_curve(self, data):
-        # check if we have r0, and change main plot accordingly
+        """ plot the significant channels from the streamer data"""
+
+        # check if we have r0, and change main plot labels accordingly
         if parse_setting('fastscan', 'use_r0') and data.shape[0] == 4:
             self.use_r0 = True
 
@@ -838,40 +858,31 @@ class FastScanPlotWidget(QWidget):
         self.stream_signal_dc0.setData(x[::2], sig_dc0)
         self.stream_signal_dc1.setData(x[::2], sig_dc1)
 
-    def on_clock(self):
+    @QtCore.pyqtSlot()
+    def _on_clock(self):
+        """ """
+        if self._scale_follow:
+            self.lazy_autoscale(100)
 
-        label = 'Noise Floor:\n'
-        label += '   {:15}:   {:.2E}\n'.format('Average', self.avg_std)
-        # label += '   {:15}:   {:.2E}\n'.format('Single Scan',self.curve_std)
-        # label += '   {:15}:   {:.2E}\n'.format('Signal/noise',self.avg_max/self.avg_std)
+    def _calculate_noise_floor(self,da):
+        """ Calculate the noise level based on std dev of unpumped data."""
+        self.avg_std = np.std(da.values[:len(da) // 20])
+        label = 'Noise Floor:'
+        label += '   {:15}:   {:.2E}'.format('Average', self.avg_std)
         self.noise_label.setText(label)
 
-        if self._scale_follow:
-
-            Xr_min = Yr_min = 10
-            Xr_max = Yr_max = -10
-            for name, curve in self.curves.items():
-                Xr, Yr = curve.dataBounds(0), curve.dataBounds(1)
-                Xr_min = min(Xr_min, Xr[0])
-                Xr_max = max(Xr_max, Xr[1])
-                Yr_min = min(Yr_min, Yr[0])
-                Yr_max = max(Yr_max, Yr[1])
-
-            self.main_plot_ranges['Xr_min'].append(Xr_min)
-            self.main_plot_ranges['Xr_max'].append(Xr_max)
-            self.main_plot_ranges['Yr_min'].append(Yr_min)
-            self.main_plot_ranges['Yr_max'].append(Yr_max)
-
-            if len(self.main_plot_ranges['Xr_min']) > 100:
-                for k, v in self.main_plot_ranges.items():
-                    _ = v.pop(0)
-
-            xrange = np.min(self.main_plot_ranges['Xr_min']), np.max(self.main_plot_ranges['Xr_max'])
-            yrange = np.min(self.main_plot_ranges['Yr_min']), np.max(self.main_plot_ranges['Yr_max'])
-            self.main_plot.setRange(xRange=xrange, yRange=yrange)
+    def _remove_baseline(self,da):
+        """ Set negative time delay signal to zero"""
+        n_prepump = len(da) // 20
+        da -= da[:n_prepump].mean()
+        return da
+    def _cut_edges(self,da):
+        """ Cut the side values of the trace to avoid artifacts in the average."""
+        off = max(1, self.avg_side_cutoff.value())
+        return da[off:-off]
 
     def _get_data_bounds(self):
-        # try:
+        """ Determine the x an y ranges of data from the current curves."""
         for name, curve in self.curves.items():
             Xr_min = Yr_min = Xr_max = Yr_max = np.nan
             Xr, Yr = curve.dataBounds(0), curve.dataBounds(1)
@@ -881,22 +892,47 @@ class FastScanPlotWidget(QWidget):
             Yr_max = np.nanmax([Yr_max, Yr[1]])
         return (Xr_min,Xr_max),(Yr_min,Yr_max)
 
-            # return (-1,1),(-1,1)
+    def lazy_autoscale(self,n):
+        """ Autoscale based on last n datasets.
+
+        Adds the current data range to a list and sets the range to the min-max
+        of this list. The list is cut when exceeds n values.
+        """
+        xRange, yRange = self._get_data_bounds()
+        if not np.nan in xRange:
+            self._main_plot_ranges['Xr_min'].append(xRange[0])
+            self._main_plot_ranges['Xr_max'].append(xRange[1])
+        if not np.nan in yRange:
+            self._main_plot_ranges['Yr_min'].append(yRange[0])
+            self._main_plot_ranges['Yr_max'].append(yRange[1])
+
+        if len(self._main_plot_ranges['Xr_min']) > n:
+            for k, v in self._main_plot_ranges.items():
+                _ = v.pop(0)
+
+        xRange = np.nanmin(self._main_plot_ranges['Xr_min']), np.nanmax(self._main_plot_ranges['Xr_max'])
+        yRange = np.nanmin(self._main_plot_ranges['Yr_min']), np.nanmax(self._main_plot_ranges['Yr_max'])
+        self.main_plot.setRange(xRange=xRange, yRange=yRange)
 
     def set_autoscale(self):
+        """ Turn on autoscale on main plot. """
         self.main_plot.enableAutoRange()
         self._scale_follow = False
         self.btn_autoscale.setEnabled(False)
         self.btn_follow.setEnabled(True)
     def set_showall(self):
+        """ Fix view of main plot to show all data. """
+
         self._scale_follow = False
         self.main_plot.disableAutoRange()
         self.btn_autoscale.setEnabled(True)
         self.btn_follow.setEnabled(True)
         xrange, yrange = self._get_data_bounds()
-        self.main_plot.setRange(xRange=xrange, yRange=yrange)
+        if not np.nan in xrange and not np.nan in yrange:
+            self.main_plot.setRange(xRange=xrange, yRange=yrange)
 
     def set_follow(self):
+        """ Set main plot ranges to follow data range. A slower version of autoscale."""
         self.main_plot.disableAutoRange()
         self._scale_follow = True
         self.btn_autoscale.setEnabled(True)
