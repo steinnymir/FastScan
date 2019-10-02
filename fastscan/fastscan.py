@@ -268,7 +268,10 @@ class FastScanThreadManager(QtCore.QObject):
         if self.all_curves is None:
             self.all_curves = processed_dataarray
         else:
-            self.all_curves = xr.concat([self.all_curves[-self.n_averages + 1:], processed_dataarray], 'avg')
+            try:
+                self.all_curves = xr.concat([self.all_curves[-self.n_averages + 1:], processed_dataarray], 'avg')
+            except:
+                raise Exception('failed calculating average: probably wrong version of xarray (0.10.3 works)')
         self._has_new_projected_data = True
 
         self.logger.debug('Updating dataset: {:.2f} ms'.format((time.time() - t0) * 1000))
@@ -776,7 +779,7 @@ def fit_autocorrelation(da, expected_pulse_duration=.1):
     return fitDict
 
 
-def fit_autocorrelation_wings(da, expected_pulse_duration=.1, wing_sep=.3, wing_ratio=.3):
+def fit_autocorrelation_wings(da, expected_pulse_duration=.1, wing_sep=.2, wing_ratio=.3,wings_n=4):
     """ fits the given data to a sech2 pulse shape"""
     da_ = da.dropna('time')
 
@@ -789,8 +792,9 @@ def fit_autocorrelation_wings(da, expected_pulse_duration=.1, wing_sep=.3, wing_
                                                                                                                 a * wing_ratio,
                                                                                                                 xc + wing_sep,
                                                                                                                 t, off)
-
-    guess = [a, xc, expected_pulse_duration, off, wing_sep, wing_ratio]
+    def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
+        return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio,wings_n)
+    guess = [a, xc, expected_pulse_duration, off, wing_sep*expected_pulse_duration, wing_ratio]
 
     try:
         popt, pcov = curve_fit(sech_wings, da_.time, da_, p0=guess)
