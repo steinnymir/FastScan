@@ -173,6 +173,7 @@ def transient_1expdec(t, A1, tau1, sigma, y0, off, t0):
     sigma: pump pulse duration
     y0: whole curve offset
     off: slow dynamics offset"""
+    from scipy.special import erf
     t = t - t0
     tmp = erf((sigma ** 2. - 5.545 * tau1 * t) / (2.7726 * sigma * tau1))
     tmp = .5 * (1 - tmp) * np.exp(sigma ** 2. / (11.09 * tau1 ** 2.))

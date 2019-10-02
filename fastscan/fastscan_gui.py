@@ -631,6 +631,7 @@ class FastScanPlotWidget(QWidget):
 
         self.curve_std, self.avg_std, self.avg_max = 1, 1, 1
         self.use_r0 = parse_setting('fastscan', 'use_r0')
+        self._scale_follow = False
 
         self.clock = QTimer()
         self.clock.setInterval(1000. / 30)
@@ -644,7 +645,29 @@ class FastScanPlotWidget(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        self.main_plot_frame = QtWidgets.QFrame()
+
+        layout_mpf  = QVBoxLayout()
+        self.main_plot_frame.setLayout(layout_mpf)
+        btn_area = QWidget()
+        l = QHBoxLayout()
+        btn_area.setLayout(l)
+        self.btn_autoscale = QPushButton('Autoscale')
+        self.btn_autoscale.clicked.connect(self.set_autoscale)
+        self.btn_showall = QPushButton('Fixed')
+        self.btn_showall.clicked.connect(self.set_showall)
+        self.btn_follow = QPushButton('Follow')
+        self.btn_follow.clicked.connect(self.set_follow)
+        l.addStretch()
+        l.addWidget(self.btn_autoscale)
+        l.addWidget(self.btn_showall)
+        l.addWidget(self.btn_follow)
+        l.addStretch()
+
         self.main_plot_widget = pg.PlotWidget(name='main_plot')
+        self.main_plot_widget.setBackground((25,25,25))
+        layout_mpf.addWidget(self.main_plot_widget)
+        layout_mpf.addWidget(btn_area)
 
         self.main_plot = self.main_plot_widget.getPlotItem()
         self.main_plot.showAxis('top', True)
@@ -653,7 +676,8 @@ class FastScanPlotWidget(QWidget):
         self.main_plot.setLabel('left', '<font>&Delta;R</font>', units='V')
         self.main_plot.setLabel('left', '<font>&Delta;R / R</font>', units='%')
         self.main_plot.setLabel('bottom', 'Time', units='s')
-        self.main_plot.disableAutoRange()
+
+        self.set_autoscale()
 
         self.main_plot_ranges = {'Xr_min': [],
                                  'Xr_max': [],
@@ -708,33 +732,12 @@ class FastScanPlotWidget(QWidget):
         self.noise_label = QLabel('Noise Floor: 0')
         controls_layout.addWidget(self.noise_label)
 
-        self.cb_autoscale = QCheckBox('Autoscale')
-        controls_layout.addWidget(self.cb_autoscale)
-        self.cb_autoscale.setChecked(True)
-
-        # --------- curves -----------#
-
-        self.last_curve = self.main_plot.plot(name='last')
-        self.last_curve.setPen((pg.mkPen(200, 200, 200)))
-        self.avg_curve = self.main_plot.plot(name='avg')
-        self.avg_curve.setPen((pg.mkPen(100, 255, 100)))
-        self.fit_curve = self.main_plot.plot(name='fit')
-        self.fit_curve.setPen((pg.mkPen(255, 100, 100)))
-
-        self.stream_curve = self.small_plot.plot()
-        self.stream_curve.setPen((pg.mkPen(255, 100, 100)))
-        self.stream_signal_dc0 = self.small_plot.plot()
-        self.stream_signal_dc0.setPen((pg.mkPen(100, 255, 100)))
-        self.stream_signal_dc1 = self.small_plot.plot()
-        self.stream_signal_dc1.setPen((pg.mkPen(100, 100, 255)))
-
-
         curve_list_layout.addStretch()
         controls_layout.addStretch()
 
         vsplitter = pQtGui.QSplitter(pQtCore.Qt.Vertical)
         hsplitter = pQtGui.QSplitter(pQtCore.Qt.Horizontal)
-        vsplitter.addWidget(self.main_plot_widget)
+        vsplitter.addWidget(self.main_plot_frame)
         vsplitter.addWidget(hsplitter)
         hsplitter.addWidget(curve_list)
         hsplitter.addWidget(controls)
@@ -745,27 +748,27 @@ class FastScanPlotWidget(QWidget):
     def resizeEvent(self, event):
         h = self.frameGeometry().height()
         w = self.frameGeometry().width()
-        self.main_plot_widget.setMinimumHeight(int(h * .7))
-        self.main_plot_widget.setMinimumWidth(500)
+        self.main_plot_frame.setMinimumHeight(int(h * .7))
+        self.main_plot_frame.setMinimumWidth(500)
 
-    def add_curve(self, name, color=(255, 255, 255)):
+    def add_curve(self, name, *args, **kwargs):
         self.curves[name] = self.main_plot.plot(name=name)
-        self.curves[name].setPen((pg.mkPen(*color)))
+        self.curves[name].setPen(*args, **kwargs)
 
     def draw_curve(self, name, da):
         if name in self.curves:
             if self.use_r0:
-                self.main_plot_widget.setLabel('left', '<font>&Delta;R / R</font>', units='')
+                self.main_plot.setLabel('left', '<font>&Delta;R / R</font>', units='')
                 self.curves[name].setData(da.time * 10 ** -12, da)  # *100) # uncomment to represent in %
             else:
-                self.main_plot_widget.setLabel('left', '<font>&Delta;R</font>', units='V')
+                self.main_plot.setLabel('left', '<font>&Delta;R</font>', units='V')
                 self.curves[name].setData(da.time * 10 ** -12, da)
 
     def plot_last_curve(self, da):
 
         if self.cb_last_curve.isChecked():
             if 'last' not in self.curves:
-                self.add_curve('last', color=(200, 200, 200))
+                self.add_curve('last', color=(200, 200, 200),alpha=.1)
             off = self.avg_side_cutoff.value() + 1
             n_prepump = len(da) // 20  # .shape[0]//20
             # self.curve_std = np.std(da.values[off:n_prepump])
@@ -781,7 +784,8 @@ class FastScanPlotWidget(QWidget):
     def plot_avg_curve(self, da):
         if self.cb_avg_curve.isChecked():
             if 'avg' not in self.curves:
-                self.add_curve('avg', color=(255, 100, 100))
+                self.add_curve('avg', color=(255, 100, 100), width=2)
+
             off = self.avg_side_cutoff.value() + 1
             da_ = da[off:-off]
             # print(da.shape, da_.shape)
@@ -814,6 +818,14 @@ class FastScanPlotWidget(QWidget):
         if parse_setting('fastscan', 'use_r0') and data.shape[0] == 4:
             self.use_r0 = True
 
+        if not hasattr(self,'stream_curve'):
+            self.stream_curve = self.small_plot.plot()
+            self.stream_curve.setPen((pg.mkPen(255, 100, 100)))
+            self.stream_signal_dc0 = self.small_plot.plot()
+            self.stream_signal_dc0.setPen((pg.mkPen(100, 255, 100)))
+            self.stream_signal_dc1 = self.small_plot.plot()
+            self.stream_signal_dc1.setPen((pg.mkPen(100, 100, 255)))
+
         x = np.arange(data.shape[1])
         pos = data[0, :]
         if data[2, 1] > data[2, 0]:
@@ -834,7 +846,7 @@ class FastScanPlotWidget(QWidget):
         # label += '   {:15}:   {:.2E}\n'.format('Signal/noise',self.avg_max/self.avg_std)
         self.noise_label.setText(label)
 
-        if self.cb_autoscale.isChecked():
+        if self._scale_follow:
 
             Xr_min = Yr_min = 10
             Xr_max = Yr_max = -10
@@ -858,6 +870,37 @@ class FastScanPlotWidget(QWidget):
             yrange = np.min(self.main_plot_ranges['Yr_min']), np.max(self.main_plot_ranges['Yr_max'])
             self.main_plot.setRange(xRange=xrange, yRange=yrange)
 
+    def _get_data_bounds(self):
+        # try:
+        for name, curve in self.curves.items():
+            Xr_min = Yr_min = Xr_max = Yr_max = np.nan
+            Xr, Yr = curve.dataBounds(0), curve.dataBounds(1)
+            Xr_min = np.nanmin([Xr_min, Xr[0]])
+            Xr_max = np.nanmax([Xr_max, Xr[1]])
+            Yr_min = np.nanmin([Yr_min, Yr[0]])
+            Yr_max = np.nanmax([Yr_max, Yr[1]])
+        return (Xr_min,Xr_max),(Yr_min,Yr_max)
+
+            # return (-1,1),(-1,1)
+
+    def set_autoscale(self):
+        self.main_plot.enableAutoRange()
+        self._scale_follow = False
+        self.btn_autoscale.setEnabled(False)
+        self.btn_follow.setEnabled(True)
+    def set_showall(self):
+        self._scale_follow = False
+        self.main_plot.disableAutoRange()
+        self.btn_autoscale.setEnabled(True)
+        self.btn_follow.setEnabled(True)
+        xrange, yrange = self._get_data_bounds()
+        self.main_plot.setRange(xRange=xrange, yRange=yrange)
+
+    def set_follow(self):
+        self.main_plot.disableAutoRange()
+        self._scale_follow = True
+        self.btn_autoscale.setEnabled(True)
+        self.btn_follow.setEnabled(False)
 
 if __name__ == '__main__':
     pass
