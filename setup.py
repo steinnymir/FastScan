@@ -21,10 +21,19 @@
 """
 from distutils.core import setup, Extension
 from Cython.Build import cythonize
-# import py2exe
 import numpy
 import os
+from configparser import ConfigParser
 
+if not os.path.isfile('SETTINGS.ini'):
+    print('creating settings file')
+    cp = ConfigParser()
+    cp.read('Default_SETTINGS.ini')
+    print(cp.sections())
+    with open('SETTINGS.ini','w+') as settingsFile:
+        cp.write(settingsFile)
+else:
+    print('settings file found')
 
 extensions = [
     Extension("fastscan.cscripts.project", [os.path.join("fastscan", "cscripts", "project.pyx")],
