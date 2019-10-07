@@ -29,12 +29,12 @@ import traceback
 
 # import matplotlib TODO: uncomment when using shaker calibration
 import h5py
-import nidaqmx
 import numpy as np
 import xarray as xr
 from PyQt5 import QtCore
 
 try:
+    import nidaqmx
     from nidaqmx import stream_readers
     from nidaqmx.constants import Edge, AcquisitionType
 except:
@@ -69,9 +69,11 @@ class FastScanThreadManager(QtCore.QObject):
     newAverage = QtCore.pyqtSignal(xr.DataArray)
     # acquisitionStopped = QtCore.pyqtSignal()
     # finished = QtCore.pyqtSignal()
-    newData = QtCore.pyqtSignal(xr.DataArray)
+    # newData = QtCore.pyqtSignal(xr.DataArray)
     completedIterativeMeasurement = QtCore.pyqtSignal()
     error = QtCore.pyqtSignal(Exception)
+
+    # fitNewCurve = QtCore.pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -103,6 +105,9 @@ class FastScanThreadManager(QtCore.QObject):
         self._counter = 0  # Counter for thread safe wait function
         self._has_new_projected_data = False
         self._calculating_average = False
+        self._fit_lock = False
+        self._autocorrelation_fit_result = None
+
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
@@ -176,6 +181,22 @@ class FastScanThreadManager(QtCore.QObject):
         self._should_stop = True
         self._streamer_running = False
 
+    # def create_fitter(self):
+    #     """ Generate the streamer thread.
+    #
+    #     This creates the thread which will acquire data from the ADC.
+    #     """
+    #
+    #     self.fitting_thread = QtCore.QThread()
+    #     self.fitter = Fitter_autocorrelation()#self.running_average, self._autocorrelation_fit_result)
+    #     self.fitter.fitResult[dict].connect(self.on_fit_result)
+    #     self.fitter.finished.connect(self.fitting_thread.exit)
+    #     self.fitter.error.connect(self.error.emit)
+    #
+    #     self.fitNewCurve.connect(self.fitter.run)
+    #     self.fitter.moveToThread(self.fitting_thread)
+    #     self.fitting_thread.started.connect(self.fitter.run)
+
     # ---------------------------------
     # timing triggers
     # ---------------------------------
@@ -233,9 +254,51 @@ class FastScanThreadManager(QtCore.QObject):
 
             runnable.signals.result.connect(self.on_avg_data)
 
+        # calculate autocorrelation
+        if self._calculate_autocorrelation and \
+                not self._fit_lock and \
+                self.running_average is not None and \
+                self._streamer_running:
+            self._fit_lock = True
+            runnable = Runnable(fit_autocorrelation_wings, self.running_average, self._autocorrelation_fit_result)
+            self.threadPool.start(runnable)
+            runnable.signals.result.connect(self.on_fit_result)
+
+            # if not hasattr(self, 'fitter'):
+            #     self.create_fitter()
+            # self.fitting_thread.stopped.connect(self.kill_streamer_thread)
+            # self.fitter = Fitter_autocorrelation(self.running_average, self._autocorrelation_fit_result)
+            # self.fitter.fitResult[dict].connect(self.on_fit_result)
+            # self.fitter.moveToThread(self.fitting_thread)
+            # self.fitting_thread.started.connect(self.fitter.run)
+            # self.fitting_thread.start()
+
+            # self.fitter.run(self.running_average)
+            # if not hasattr(self,'fitting_thread'):
+            #     self.fitting_thread = QtCore.QThread()
+            #     # self.fitting_thread.stopped.connect(self.kill_streamer_thread)
+            # self._fit_lock = True
+            # self.fitter = Fitter_autocorrelation(self.running_average,prevFitResults=self._autocorrelation_fit_result,n_wings=2)
+            # self.fitter.fitResult[dict].connect(self.on_fit_result)
+            # # self.fitter.error.connect(self.raise_thread_error)
+            #
+            # self.fitter.moveToThread(self.fitting_thread)
+            # self.fitting_thread.started.connect(self.fitter.run)
+            # self.fitting_thread.start()
+
     # ---------------------------------
     # data handling pipeline
     # ---------------------------------
+
+    @QtCore.pyqtSlot(dict)
+    def on_fit_result(self, fitDict):
+        self.logger.debug('emitting fit results')
+        if fitDict['curve'] is not None:
+            self.newFitResult.emit(fitDict)
+            print(fitDict)
+            print(self.running_average)
+            self._autocorrelation_fit_result = fitDict
+        self._fit_lock = False
 
     @QtCore.pyqtSlot(xr.DataArray)
     def on_avg_data(self, da):
@@ -243,11 +306,6 @@ class FastScanThreadManager(QtCore.QObject):
         # self._calculating_average = False
         self.running_average = da
         self.newAverage.emit(da)
-
-        if self._calculate_autocorrelation:
-            runnable = Runnable(fit_autocorrelation_wings, da, expected_pulse_duration=.1)
-            self.threadPool.start(runnable)
-            runnable.signals.result.connect(self.newFitResult.emit)
 
     @QtCore.pyqtSlot(tuple)  # xr.DataArray, list)
     def on_projector_data(self, processed_dataarray_tuple):
@@ -757,6 +815,146 @@ class Runnable(QtCore.QRunnable):
 # -----------------------------------------------------------------------------
 #       Projector
 # -----------------------------------------------------------------------------
+class Worker(QtCore.QObject):
+    stopped = QtCore.pyqtSignal()
+    finished = QtCore.pyqtSignal()
+    fitResult = QtCore.pyqtSignal(dict)
+    error = QtCore.pyqtSignal(Exception)
+
+    def on_error(self, e):
+        print('error in {} class'.format(type(self)))
+        self.error.emit(e)
+
+    def stop(self):
+        self.threadactive = False
+        self.wait()
+        self.stopped.emit()
+
+
+#
+# class Fitter_autocorrelation(Worker):
+#
+#     def __init__(self):#, dataArray, prevFitResults=None, n_wings=0):
+#         super().__init__()
+#         self.logger = logging.getLogger('{}.FittingThread'.format(__name__))
+#         self.logger.info('Created Fitter thread')
+#
+#         self.data = dataArray.dropna('time')
+#
+#         if prevFitResults is None:
+#             self.assign_default_guess()
+#         else:
+#             if sum(prevFitResults['popt']) == 0:
+#                 self.assign_default_guess()
+#             else:
+#                 self.guess = prevFitResults
+#
+#             #     xc = self.data.time[np.argmax(self.data.values)]
+#         #     off = self.data[self.data.time - xc > .2].mean()
+#         #     a = self.data.max() - off
+#
+#     def assign_default_guess(self):
+#         guess_vals = parse_category('autocorrelation guess')
+#         xc = guess_vals.get('center_position', -1)
+#         a = guess_vals.get('amplitude', 1)
+#         off = guess_vals.get('offset', 1)
+#         fwhm = guess_vals.get('fwhm', .1)
+#         wing_sep = guess_vals.get('wing_sep', 1)
+#         wing_ratio = guess_vals.get('wing_ratio', .3)
+#         self.n_wings = guess_vals.get('wing_n', 2)
+#         self.guess = [a, xc, fwhm, off, wing_sep, wing_ratio]
+#
+#     @QtCore.pyqtSlot()
+#     def run(self):
+#         self.logger.debug('Attempting to fit Autocorrelation curve')
+#
+#         def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
+#             return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio, 2)  # self.n_wings)
+#
+#         try:
+#             popt, pcov = curve_fit(sech_wings, self.data.time, self.data, p0=self.guess)
+#             self.logger.debug('Successuflly fit data: result:\n {}'.format(popt))
+#
+#         except RuntimeError:
+#             self.logger.debug('Failed fitting data. \n\nRuntime error\n\n')
+#             popt, pcov = [0, 0, 0, 0, 0, 0], np.zeros((6, 6))
+#
+#         fitDict = {'popt': popt,
+#                    'pcov': pcov,
+#                    'perr': np.sqrt(np.diag(pcov)),
+#                    'curve': xr.DataArray(sech_wings(self.data.time, *popt), coords={'time': self.data.time},
+#                                          dims='time'),
+#                    }
+#         self.logger.debug('Fitting Autocorrelation complete')
+#         self.fitResult.emit(fitDict)
+#
+
+
+def fit_autocorrelation_wings(da, prev_result=None):
+    """ fits the given data to a sech2 pulse shape"""
+    da_ = da.dropna('time')
+
+    n_wings = parse_setting('autocorrelation guess', 'n_wings')
+    fit_curve_points = parse_setting('autocorrelation guess', 'fit_curve_points')
+    fit_curve_sigmas = parse_setting('autocorrelation guess', 'fit_curve_sigmas')
+
+    if prev_result is None or np.nan in prev_result['popt']:
+        xc = da_.time[np.argmax(da_.values)]
+        off = da_[da_.time - xc > .2].mean()
+        a = da_.max() - off
+        fwhm = parse_setting('autocorrelation guess', 'fwhm')
+        wing_sep = parse_setting('autocorrelation guess', 'wing_sep')
+        wing_ratio = parse_setting('autocorrelation guess', 'wing_ratio')
+        guess = [a, xc, fwhm, off, wing_sep, wing_ratio]
+        # bounds = [[0, xc - 1, 0.001, -np.inf, 0.00001, 0.000001],
+        #           [100, xc + 1, 10, np.inf, 10, 10]]
+    else:
+        guess = prev_result['popt']
+
+    def sech_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio):
+        return sech2_fwhm_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio, n_wings)
+
+    try:
+        popt, pcov = curve_fit(sech_wings, da_.time, da_, p0=guess)  # , bounds=bounds)
+
+        perr = np.sqrt(np.diag(pcov))
+        x = np.linspace(popt[1] - fit_curve_sigmas * popt[2], popt[1] + fit_curve_sigmas * popt[2], fit_curve_points)
+        curve = xr.DataArray(sech_wings(x, *popt), coords={'time': x}, dims='time')
+    except RuntimeError:
+        popt = pcov = perr = curve = None
+    fitDict = {'popt': popt,
+               'pcov': pcov,
+               'perr': perr,
+               'curve': curve,
+               }
+    return fitDict
+
+
+def fit_autocorrelation_wings___(da, expected_pulse_duration=.1, wing_sep=.2, wing_ratio=.3, wings_n=4):
+    """ fits the given data to a sech2 pulse shape"""
+    da_ = da.dropna('time')
+
+    xc = da_.time[np.argmax(da_.values)]
+    off = da_[da_.time - xc > .2].mean()
+    a = da_.max() - off
+
+    def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
+        return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio, wings_n)
+
+    guess = [a, xc, expected_pulse_duration, off, wing_sep * expected_pulse_duration, wing_ratio]
+
+    try:
+        popt, pcov = curve_fit(sech_wings, da_.time, da_, p0=guess)
+    except RuntimeError:
+        popt, pcov = [0, 0, 0, 0, 0, 0], np.zeros((6, 6))
+
+    fitDict = {'popt': popt,
+               'pcov': pcov,
+               'perr': np.sqrt(np.diag(pcov)),
+               'curve': xr.DataArray(sech_wings(da_.time, *popt), coords={'time': da_.time}, dims='time'),
+               }
+    return fitDict
+
 
 def fit_autocorrelation(da, expected_pulse_duration=.1):
     """ fits the given data to a sech2 pulse shape"""
@@ -775,35 +973,6 @@ def fit_autocorrelation(da, expected_pulse_duration=.1):
                'pcov': pcov,
                'perr': np.sqrt(np.diag(pcov)),
                'curve': xr.DataArray(sech2_fwhm(da_.time, *popt), coords={'time': da_.time}, dims='time')
-               }
-    return fitDict
-
-
-def fit_autocorrelation_wings(da, expected_pulse_duration=.1, wing_sep=.2, wing_ratio=.3,wings_n=4):
-    """ fits the given data to a sech2 pulse shape"""
-    da_ = da.dropna('time')
-
-    xc = da_.time[np.argmax(da_.values)]
-    off = da_[da_.time - xc > .2].mean()
-    a = da_.max() - off
-
-    def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
-        return sech2_fwhm(x, a, xc, t, off) + sech2_fwhm(x, a * wing_ratio, xc - wing_sep, t, off) + sech2_fwhm(x,
-                                                                                                                a * wing_ratio,
-                                                                                                                xc + wing_sep,
-                                                                                                                t, off)
-    def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
-        return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio,wings_n)
-    guess = [a, xc, expected_pulse_duration, off, wing_sep*expected_pulse_duration, wing_ratio]
-
-    try:
-        popt, pcov = curve_fit(sech_wings, da_.time, da_, p0=guess)
-    except RuntimeError:
-        popt, pcov = [0, 0, 0, 0, 0, 0], np.zeros((6, 6))
-    fitDict = {'popt': popt,
-               'pcov': pcov,
-               'perr': np.sqrt(np.diag(pcov)),
-               'curve': xr.DataArray(sech_wings(da_.time, *popt), coords={'time': da_.time}, dims='time')
                }
     return fitDict
 
@@ -1073,9 +1242,9 @@ class FastScanStreamer(QtCore.QObject):
                           sim_parameters['offset']
                           ]
         if sim_parameters['function'] == 'sech2_fwhm_wings':
-            fit_parameters.append(sim_parameters['wing_sep']*sim_parameters['fwhm'])
+            fit_parameters.append(sim_parameters['wing_sep'] * sim_parameters['fwhm'])
             fit_parameters.append(sim_parameters['wing_ratio'])
-            fit_parameters.append(sim_parameters['wing_n'])
+            fit_parameters.append(sim_parameters['n_wings'])
 
         step = parse_setting('fastscan', 'shaker_position_step')
         ps_per_step = parse_setting('fastscan', 'shaker_ps_per_step')  # ADC step size - corresponds to 25fs

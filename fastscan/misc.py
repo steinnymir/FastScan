@@ -24,17 +24,35 @@ import os
 import sys
 import numpy as np
 from configparser import ConfigParser
+from PyQt5 import QtWidgets
 
 
 # -------------------------
-# Qt error catching
+# Qt stuff
 # -------------------------
 def my_exception_hook(exctype, value, traceback):
+    """error catching for qt in pycharm"""
     # Print the error and traceback
     print(exctype, value, traceback)
     # Call the normal Exception hook after
     sys._excepthook(exctype, value, traceback)
     sys.exit(1)
+
+def labeledQwidget(label,widget,align='h'):
+    """Create a horizontally aligned label and widget."""
+    w = QtWidgets.QWidget()
+
+    if align in ['h','horizontal']:
+        l = QtWidgets.QHBoxLayout()
+    elif align in ['vertical', 'v']:
+        l = QtWidgets.QVBoxLayout()
+    else:
+        raise Exception('{} not a valid alignment, please use "h" or "v"'.format(align))
+    l.addWidget(QtWidgets.QLabel(label))
+    l.addWidget(widget)
+    l.addStretch()
+    w.setLayout(l)
+    return w
 
 
 # -------------------------
@@ -155,10 +173,10 @@ def sech2_fwhm_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio, wings_n):
     """ sech squared with n wings."""
     res = sech2_fwhm(x, a, xc, fwhm, off)
     for n in range(1, wings_n):
-        res += sech2_fwhm(x, a * (wing_ratio ** n), xc - n * wing_sep, fwhm, off)
-        res += sech2_fwhm(x, a * (wing_ratio ** n), xc + n * wing_sep, fwhm, off)
+        res += sech2_fwhm(x, a * (wing_ratio ** n), xc - n * wing_sep, fwhm, 0)
+        res += sech2_fwhm(x, a * (wing_ratio ** n), xc + n * wing_sep, fwhm, 0)
 
-    return res/wings_n
+    return res
 
 def gaussian(x, mu, sig):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
@@ -178,6 +196,14 @@ def transient_1expdec(t, A1, tau1, sigma, y0, off, t0):
     tmp = erf((sigma ** 2. - 5.545 * tau1 * t) / (2.7726 * sigma * tau1))
     tmp = .5 * (1 - tmp) * np.exp(sigma ** 2. / (11.09 * tau1 ** 2.))
     return y0 + tmp * (A1 * (np.exp(-t / tau1)) + off)
+
+def read_h5(file):
+    dd = {}
+    with h5py.File(file,'r') as f:
+        for key,val in f.items():
+            dd[key] = val
+    return dd
+
 
 
 # -------------------------
