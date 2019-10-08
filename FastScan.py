@@ -33,7 +33,7 @@ import logging
 import sys, os
 from logging.config import fileConfig
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, QtGui
 
 from fastscan.fastscan_gui import FastScanMainWindow
 # from utilities.settings import set_default_settings
@@ -55,7 +55,13 @@ def main():
     logger.debug('Started logger')
 
     app = QtCore.QCoreApplication.instance()
-
+    app_icon = QtGui.QIcon()
+    # app_icon.addFile('icons/logo16.png', QtCore.QSize(16, 16))
+    # app_icon.addFile('icons/logo24.png', QtCore.QSize(24, 24))
+    # app_icon.addFile('icons/logo32.png', QtCore.QSize(32, 32))
+    # app_icon.addFile('icons/logo48.png', QtCore.QSize(48, 48))
+    # app_icon.addFile('icons/logo256.png', QtCore.QSize(256, 256))
+    # app.setWindowIcon(app_icon)
     if app is None:
         app = QtWidgets.QApplication(sys.argv)
     # Create handle prg for the Graphic Interface

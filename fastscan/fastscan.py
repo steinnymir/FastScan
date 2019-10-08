@@ -783,6 +783,10 @@ class Runnable(QtCore.QRunnable):
     :param kwargs: Keywords to pass to the callback function
     :
     '''
+    finished = QtCore.pyqtSignal()
+    error = QtCore.pyqtSignal(tuple)
+    result = QtCore.pyqtSignal(object)
+    progress = QtCore.pyqtSignal(int)
 
     def __init__(self, fn, *args, **kwargs):
         super(Runnable, self).__init__()
@@ -810,84 +814,6 @@ class Runnable(QtCore.QRunnable):
             self.signals.result.emit(result)  # Return the result of the processing
         finally:
             self.signals.finished.emit()  # Done
-
-
-# -----------------------------------------------------------------------------
-#       Projector
-# -----------------------------------------------------------------------------
-class Worker(QtCore.QObject):
-    stopped = QtCore.pyqtSignal()
-    finished = QtCore.pyqtSignal()
-    fitResult = QtCore.pyqtSignal(dict)
-    error = QtCore.pyqtSignal(Exception)
-
-    def on_error(self, e):
-        print('error in {} class'.format(type(self)))
-        self.error.emit(e)
-
-    def stop(self):
-        self.threadactive = False
-        self.wait()
-        self.stopped.emit()
-
-
-#
-# class Fitter_autocorrelation(Worker):
-#
-#     def __init__(self):#, dataArray, prevFitResults=None, n_wings=0):
-#         super().__init__()
-#         self.logger = logging.getLogger('{}.FittingThread'.format(__name__))
-#         self.logger.info('Created Fitter thread')
-#
-#         self.data = dataArray.dropna('time')
-#
-#         if prevFitResults is None:
-#             self.assign_default_guess()
-#         else:
-#             if sum(prevFitResults['popt']) == 0:
-#                 self.assign_default_guess()
-#             else:
-#                 self.guess = prevFitResults
-#
-#             #     xc = self.data.time[np.argmax(self.data.values)]
-#         #     off = self.data[self.data.time - xc > .2].mean()
-#         #     a = self.data.max() - off
-#
-#     def assign_default_guess(self):
-#         guess_vals = parse_category('autocorrelation guess')
-#         xc = guess_vals.get('center_position', -1)
-#         a = guess_vals.get('amplitude', 1)
-#         off = guess_vals.get('offset', 1)
-#         fwhm = guess_vals.get('fwhm', .1)
-#         wing_sep = guess_vals.get('wing_sep', 1)
-#         wing_ratio = guess_vals.get('wing_ratio', .3)
-#         self.n_wings = guess_vals.get('wing_n', 2)
-#         self.guess = [a, xc, fwhm, off, wing_sep, wing_ratio]
-#
-#     @QtCore.pyqtSlot()
-#     def run(self):
-#         self.logger.debug('Attempting to fit Autocorrelation curve')
-#
-#         def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
-#             return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio, 2)  # self.n_wings)
-#
-#         try:
-#             popt, pcov = curve_fit(sech_wings, self.data.time, self.data, p0=self.guess)
-#             self.logger.debug('Successuflly fit data: result:\n {}'.format(popt))
-#
-#         except RuntimeError:
-#             self.logger.debug('Failed fitting data. \n\nRuntime error\n\n')
-#             popt, pcov = [0, 0, 0, 0, 0, 0], np.zeros((6, 6))
-#
-#         fitDict = {'popt': popt,
-#                    'pcov': pcov,
-#                    'perr': np.sqrt(np.diag(pcov)),
-#                    'curve': xr.DataArray(sech_wings(self.data.time, *popt), coords={'time': self.data.time},
-#                                          dims='time'),
-#                    }
-#         self.logger.debug('Fitting Autocorrelation complete')
-#         self.fitResult.emit(fitDict)
-#
 
 
 def fit_autocorrelation_wings(da, prev_result=None):

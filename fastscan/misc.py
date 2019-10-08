@@ -22,8 +22,11 @@
 import ast
 import os
 import sys
-import numpy as np
 from configparser import ConfigParser
+
+import h5py
+import numpy as np
+import xarray as xr
 from PyQt5 import QtWidgets
 
 
@@ -38,11 +41,12 @@ def my_exception_hook(exctype, value, traceback):
     sys._excepthook(exctype, value, traceback)
     sys.exit(1)
 
-def labeledQwidget(label,widget,align='h'):
+
+def labeledQwidget(label, widget, align='h'):
     """Create a horizontally aligned label and widget."""
     w = QtWidgets.QWidget()
 
-    if align in ['h','horizontal']:
+    if align in ['h', 'horizontal']:
         l = QtWidgets.QHBoxLayout()
     elif align in ['vertical', 'v']:
         l = QtWidgets.QVBoxLayout()
@@ -169,6 +173,7 @@ def sech2_fwhm(x, A, x0, fwhm, c):
     tau = fwhm * 2 / 1.76
     return A / (np.cosh((x - x0) / tau)) ** 2 + c
 
+
 def sech2_fwhm_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio, wings_n):
     """ sech squared with n wings."""
     res = sech2_fwhm(x, a, xc, fwhm, off)
@@ -178,12 +183,16 @@ def sech2_fwhm_wings(x, a, xc, fwhm, off, wing_sep, wing_ratio, wings_n):
 
     return res
 
+
 def gaussian(x, mu, sig):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+
 
 def gaussian_fwhm(x, A, x0, fwhm, c):
     sig = fwhm * 2 / 2.355
     return A * np.exp(-np.power(x - x0, 2.) / (2 * np.power(sig, 2.))) + c
+
+
 def transient_1expdec(t, A1, tau1, sigma, y0, off, t0):
     """ Fitting function for transients, 1 exponent decay.
     A: Amplitude
@@ -197,13 +206,21 @@ def transient_1expdec(t, A1, tau1, sigma, y0, off, t0):
     tmp = .5 * (1 - tmp) * np.exp(sigma ** 2. / (11.09 * tau1 ** 2.))
     return y0 + tmp * (A1 * (np.exp(-t / tau1)) + off)
 
+
 def read_h5(file):
     dd = {}
-    with h5py.File(file,'r') as f:
-        for key,val in f.items():
-            dd[key] = val
+    with h5py.File(file, 'r') as f:
+        if 'avg' in f:
+            data = f['avg']['data']
+            time = f['avg']['time_axis']
+            dd['avg'] = xr.DataArray(data, coords={'time': time}, dims=('time'))
+        if 'raw' in f:
+            dd['raw'] = f['raw']['avg'][:]
+        if 'all_data' in f:
+            data = f['all_data']['data']
+            time = f['all_data']['time_axis']
+            dd['all_data'] = xr.DataArray(data, coords={'time': time}, dims=('avg', 'time'))
     return dd
-
 
 
 # -------------------------

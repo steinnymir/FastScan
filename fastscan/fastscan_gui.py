@@ -56,6 +56,8 @@ class FastScanMainWindow(QMainWindow):
         self.setGeometry(hpos, vpos, width, height)
         # self.showMaximized()
 
+        self.setWindowIcon(QtGui.QIcon('logo256_w.png'))
+
         self.status_bar = self.statusBar()
         self.status_bar.showMessage('ready')
         #######################################################
@@ -718,11 +720,13 @@ class FastScanPlotWidget(QWidget):
         vsplitter.addWidget(self.main_plot_frame)
         vsplitter.addWidget(hsplitter)
         # vsplitter.setSizes([100,1])
-        # vsplitter.setStretchFactor(10, 1)
+        vsplitter.setStretchFactor(0, 1.7)
         hsplitter.addWidget(curve_list)
         hsplitter.addWidget(controls)
         hsplitter.addWidget(self.small_plot_widget)
 
+
+        # vsplitter.setStretchFactor(0,3)
         layout.addWidget(vsplitter)
 
     def resizeEvent(self, event):
@@ -782,9 +786,10 @@ class FastScanPlotWidget(QWidget):
             da_ = self.post_process(da, cutEdges=True)
             self.draw_curve('avg', da_)  # plot the curve
         else:
-            if 'avg' in self.showCurves:
+            if 'avg' in self.curves:
                 self.main_plot.removeItem(self.curves.pop('avg'))
 
+    @QtCore.pyqtSlot()
     def clean_plot(self):
         if not self.cb_last_curve.isChecked() and 'last' in self.curves:
             self.main_plot.removeItem(self.curves.pop('last'))
