@@ -35,7 +35,7 @@ from logging.config import fileConfig
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
-from fastscan.fastscan_gui import FastScanMainWindow
+from fastscan.gui import FastScanMainWindow
 # from utilities.settings import set_default_settings
 
 

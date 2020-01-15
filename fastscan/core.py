@@ -47,7 +47,8 @@ from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fw
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
-    from .cscripts.project import project, project_r0
+    from fastscan.cscripts.project import project, project_r0
+    print('Loaded Cython scripts')
 except:
     print('warning: failed loading cython projector, loading python instead')
     from .cscripts.projectPy import project, project_r0
@@ -243,7 +244,6 @@ class FastScanThreadManager(QtCore.QObject):
                 and 'avg' in self.all_curves.dims \
                 and self._has_new_projected_data:
             self._has_new_projected_data = False
-            # self._calculating_average = True
             self.logger.debug('Calculating average...')
 
             def f(da):
@@ -344,20 +344,18 @@ class FastScanThreadManager(QtCore.QObject):
         """
         self.newStreamerData.emit(streamer_data)
         t0 = time.time()
-        if self.streamer_average is None:
+        if self.streamer_average is None: # initialize average data container
             self.streamer_average = streamer_data
             self._number_of_streamer_averages = 1
-        else:
+        else: # recalculate average curve
             self._number_of_streamer_averages += 1
             self.streamer_average = update_average(streamer_data, self.streamer_average,
                                                    self._number_of_streamer_averages)
         self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
                                                                                   self._number_of_streamer_averages))
-        self._stream_queue.put(streamer_data)
+        self._stream_queue.put(streamer_data) # add new data to
         self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
-        # _to_project = self._stream_queue.get()
-        # print('got stream from queue: {}'.format(_to_project.shape))
-        # self.start_projector(_to_project)
+
 
     # ---------------------------------
     # data I/O
@@ -852,32 +850,6 @@ def fit_autocorrelation_wings(da, prev_result=None):
                'pcov': pcov,
                'perr': perr,
                'curve': curve,
-               }
-    return fitDict
-
-
-def fit_autocorrelation_wings___(da, expected_pulse_duration=.1, wing_sep=.2, wing_ratio=.3, wings_n=4):
-    """ fits the given data to a sech2 pulse shape"""
-    da_ = da.dropna('time')
-
-    xc = da_.time[np.argmax(da_.values)]
-    off = da_[da_.time - xc > .2].mean()
-    a = da_.max() - off
-
-    def sech_wings(x, a, xc, t, off, wing_sep, wing_ratio):
-        return sech2_fwhm_wings(x, a, xc, t, off, wing_sep, wing_ratio, wings_n)
-
-    guess = [a, xc, expected_pulse_duration, off, wing_sep * expected_pulse_duration, wing_ratio]
-
-    try:
-        popt, pcov = curve_fit(sech_wings, da_.time, da_, p0=guess)
-    except RuntimeError:
-        popt, pcov = [0, 0, 0, 0, 0, 0], np.zeros((6, 6))
-
-    fitDict = {'popt': popt,
-               'pcov': pcov,
-               'perr': np.sqrt(np.diag(pcov)),
-               'curve': xr.DataArray(sech_wings(da_.time, *popt), coords={'time': da_.time}, dims='time'),
                }
     return fitDict
 
