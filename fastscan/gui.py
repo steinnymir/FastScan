@@ -21,7 +21,7 @@
 """
 
 import logging
-import os
+import sys, os
 import time
 import numpy as np
 import pyqtgraph as pg
@@ -29,14 +29,27 @@ import qdarkstyle
 import xarray as xr
 from PyQt5 import QtGui, QtCore, QtWidgets
 from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
     QRadioButton, QLineEdit, QComboBox, QSizePolicy, \
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QPushButton, QGridLayout, QSpinBox, QLabel
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QPushButton, QGridLayout, QSpinBox, QLabel, QFrame
 from pyqtgraph.Qt import QtCore as pQtCore, QtGui as pQtGui
 from scipy.signal import butter, filtfilt
 from fastscan.misc import parse_category, parse_setting, labeledQwidget, write_setting
 from fastscan.core import FastScanThreadManager
+
+try:
+    sys.path.append(parse_setting('paths','instruments_repo'))
+    from instruments.delaystage import DelayStage, Standa_8SMC5
+
+    # from instruments.Cryostat import *
+
+    # from instruments.cryostat import Cryostat
+    print('Loaded instruments')
+except:
+    print('WARNING: failed loading instruments repo')
+
+
 
 class FastScanMainWindow(QMainWindow):
 
@@ -605,6 +618,9 @@ class FastScanMainWindow(QMainWindow):
         self.start_iterative_measurement_button.clicked.connect(self.start_iterative_measurement)
 
         # layout.addWidget(shaker_calib_gbox)
+
+        stage_control = StageController(Standa_8SMC5)
+        layout.addWidget(stage_control)
         layout.addStretch()
         return widget
 
@@ -658,6 +674,8 @@ class FastScanMainWindow(QMainWindow):
         manager_thread = QtCore.QThread()
         manager.moveToThread(manager_thread)
         manager_thread.start()
+
+        #todo: add instruments to be passed to core class
 
         return manager, manager_thread
 
@@ -1311,6 +1329,136 @@ class FastScanPlotWidget(QWidget):
         self._scale_follow = True
         self.btn_autoscale.setEnabled(True)
         self.btn_follow.setEnabled(False)
+
+
+class StageController(QGroupBox):
+
+
+    def __init__(self,stage):
+        super(StageController, self).__init__('Delay Stage Controls')
+        self.logger = logging.getLogger('-.{}.StageController'.format(__name__))
+        # layout
+        self.lay = QGridLayout(self)
+        self.setLayout(self.lay)
+
+        self.stage = stage()
+
+        self.logger.info('Created Stage Control')
+
+        self.stepsize = 0.1
+        self.__currentPos = 0.0
+
+        self.col = QColor(255, 0, 0)
+        self.leftButton = QPushButton("←")
+        self.rightButton = QPushButton("→")
+        self.disConnectButton = QPushButton("connect")
+        self.mmRButton = QRadioButton("mm")
+        self.psRButton = QRadioButton("ps")
+        self.setCurPosAsZero = QPushButton("Set current position as zero")
+
+        self.stepsizeSpinner = QDoubleSpinBox()
+        self.stepsizeSpinner.setRange(0, 100000)
+        self.stepsizeSpinner.setValue(self.stepsize)
+        self.stepsizeSpinner.setDecimals(3)
+
+        self.moveToSpinner = QDoubleSpinBox()
+        self.moveToSpinner.setRange(-100000, 100000)
+        self.moveToSpinner.setValue(0.0)
+        self.moveToSpinner.setDecimals(3)
+
+        self.moveToButton = QPushButton("Move to:")
+
+        self.posLabel = QLabel("Current position:  {:.3f}".format(self.__currentPos))
+
+        self.square = QFrame(self)
+        self.square.setGeometry(150, 20, 10, 10)
+        self.square.setStyleSheet("QWidget { background-color: %s }" %
+                                  self.col.name())
+
+        self.lay.addWidget(QLabel("Delay Stage"), 0, 0, 1, 1)
+        self.lay.addWidget(self.square, 1, 0, 1, 1)
+        self.lay.addWidget(self.disConnectButton, 1, 1, 1, 2)
+        self.lay.addWidget(self.mmRButton, 1, 5, 1, 1)
+        self.lay.addWidget(self.psRButton, 2, 5, 1, 1)
+        self.lay.addWidget(self.leftButton, 2, 0)
+        self.lay.addWidget(self.rightButton, 2, 3, 1, 2)
+        self.lay.addWidget(QLabel("Stepsize"), 2, 1, 1, 1)
+        self.lay.addWidget(self.stepsizeSpinner, 2, 2, 1, 1)
+        self.lay.addWidget(self.posLabel, 3, 0, 1, 2)
+        self.lay.addWidget(self.moveToButton, 4, 0, 1, 1)
+        self.lay.addWidget(self.moveToSpinner, 4, 1, 1, 1)
+        self.lay.addWidget(self.setCurPosAsZero, 5, 0, 1, 3)
+
+        self.disConnectButton.clicked.connect(self.dis_connect)
+        self.stepsizeSpinner.valueChanged.connect(self.set_Stepsize)
+        self.rightButton.clicked.connect(self.move_Right)
+        self.leftButton.clicked.connect(self.move_Left)
+        self.setCurPosAsZero.clicked.connect(self.set_Cur_Pos_As_Zero)
+        self.moveToButton.clicked.connect(self.move_to)
+
+    def dis_connect(self):
+        if self.disConnectButton.text() == "connect":
+            self.col.setGreen(255)
+            self.col.setRed(0)
+            self.square.setStyleSheet("QFrame { background-color: %s }" %
+                                      self.col.name())
+            self.disConnectButton.setText("disconnect")
+        else:
+            self.col.setGreen(0)
+            self.col.setRed(255)
+            self.square.setStyleSheet("QFrame { background-color: %s }" %
+                                      self.col.name())
+            self.disConnectButton.setText("connect")
+
+    def set_Stepsize(self, size):
+        self.stepsize = size
+
+    def move_Right(self):
+        self.currentPos += self.stepsize
+        self.stage.move_absolute(self.__currentPos)
+        # self.posLabel.setText("Current position:  " + str(self.__currentPos))
+
+    def move_Left(self):
+        self.currentPos -= self.stepsize
+        self.stage.move_absolute(self.__currentPos)
+        # self.posLabel.setText("Current position:  " + str(self.__currentPos))
+
+    def set_Cur_Pos_As_Zero(self):
+        self.stage.set_zero_position()
+        self.currentPos = 0.0
+        # self.posLabel.setText("Current position:  " + str(self.__currentPos))
+
+    def move_to(self):
+        self.currentPos = self.moveToSpinner.value()
+        self.stage.move_absolute(self.__currentPos)
+        # self.posLabel.setText("Current position:  " + str(self.__currentPos))
+
+    def setValues(self):
+        valueList = [self.startButton.text()]
+        stepList = []
+        for i in self.buttonList:
+            valueList.append(i[0].text())
+            stepList.append(i[1].text())
+        print(valueList)
+        self.setTimeScale.emit(valueList, stepList)
+
+    @property
+    def currentPos(self):
+        return self.stage.position_current
+
+    @currentPos.setter
+    def currentPos(self, value):
+        self.__currentPos = value
+        self.stage.move_absolute(value)
+        self.posLabel.setText("Current position:  {:.3f} ps ".format(value))
+
+
+
+    def add_axis(self,name, device_class, *args, **kwargs):
+        """ Add one stage axis"""
+        assert isinstance(device_class, DelayStage)
+        self.axes[name] = device_class(*args, **kwargs)
+
 
 
 if __name__ == '__main__':

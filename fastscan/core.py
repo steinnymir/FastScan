@@ -22,8 +22,7 @@
 
 import logging
 import multiprocessing as mp
-import os
-import sys
+import sys, os
 import time
 import traceback
 
@@ -50,9 +49,17 @@ try:
     from fastscan.cscripts.project import project, project_r0
     print('Loaded Cython scripts')
 except:
-    print('warning: failed loading cython projector, loading python instead')
+    print('WARNING: failed loading cython projector, loading python instead')
     from .cscripts.projectPy import project, project_r0
 
+
+try: #TODO: remove,
+    sys.path.append(parse_setting('paths','instruments_repo'))
+    from instruments.delaystage import Standa_8SMC5 as DelayStage
+    # from instruments.cryostat import Cryostat
+    print('Loaded instruments')
+except:
+    print('WARNING: failed loading instruments repo')
 
 # -----------------------------------------------------------------------------
 #       thread management
@@ -110,7 +117,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._autocorrelation_fit_result = None
 
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
-        # self.delay_stage = DelayStage()
+        self.delay_stage = DelayStage()
 
         self.fast_timer = QtCore.QTimer()
         self.fast_timer.setInterval(1)
@@ -446,10 +453,13 @@ class FastScanThreadManager(QtCore.QObject):
         min_ = projected.time.min()
         max_ = projected.time.max()
         print('\n - ')
+        # generate a list of positions for the stage to move to
         calib_positions_ = np.linspace(min_ * .7, max_ * .7, iterations // 2)
         calib_positions = np.concatenate((calib_positions_, calib_positions_[::-1]))
         centers = []
+        # optional: shuffle the values  to reduce sistematic stage position errors:
         # np.random.shuffle(calib_positions)
+        # for each step measure and fit an autocorrelation curve, to establish the peak position
         for pos in calib_positions:
             print('\n - moving stage')
 
@@ -479,6 +489,7 @@ class FastScanThreadManager(QtCore.QObject):
 
         mean = np.mean(steps)
         std = np.std(steps)
+        # filter out outliers:
         good_steps = [x for x in steps if (np.abs(x - mean) < 2 * std)]
 
         # correction_factor = np.mean(calib_steps)/np.mean(steps)
