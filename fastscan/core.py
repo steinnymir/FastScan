@@ -55,7 +55,7 @@ except:
 
 try: #TODO: remove,
     sys.path.append(parse_setting('paths','instruments_repo'))
-    from instruments.delaystage import Standa_8SMC5 as DelayStage
+    from instruments.delaystage import DelayStage, Standa_8SMC5
     # from instruments.cryostat import Cryostat
     print('Loaded instruments')
 except:
@@ -351,6 +351,7 @@ class FastScanThreadManager(QtCore.QObject):
         """
         self.newStreamerData.emit(streamer_data)
         t0 = time.time()
+        # update raw streamer data average:
         if self.streamer_average is None: # initialize average data container
             self.streamer_average = streamer_data
             self._number_of_streamer_averages = 1
@@ -360,6 +361,8 @@ class FastScanThreadManager(QtCore.QObject):
                                                    self._number_of_streamer_averages)
         self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
                                                                                   self._number_of_streamer_averages))
+
+        #
         self._stream_queue.put(streamer_data) # add new data to
         self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
 
@@ -446,10 +449,15 @@ class FastScanThreadManager(QtCore.QObject):
         self.create_streamer()
 
         # stream = self.streamer.simulate_single_shot(integration)
-        stream = self.streamer.measure_single_shot(integration)
+        if parse_setting('fastscan', 'simulate'):
+            stream = self.streamer.simulate_single_shot(integration)
+        else:
+            stream = self.streamer.measure_single_shot(integration)
 
-        projected = project(stream, self.dark_control,
-                            self.shaker_position_step, 0.05)
+        # projected = project(stream, self.dark_control,
+        #                     self.shaker_position_step, 0.05)
+        projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control, adc_step=0.000152587890625, time_step=.05,
+              use_r0=True)
         min_ = projected.time.min()
         max_ = projected.time.max()
         print('\n - ')
@@ -468,9 +476,16 @@ class FastScanThreadManager(QtCore.QObject):
                 write_setting(pos, 'fastscan - simulation', 'center_position')
 
             # stream = self.streamer.simulate_single_shot(integration)
-            stream = self.streamer.measure_single_shot(integration)
-            projected = project(stream, self.dark_control,
-                                self.shaker_position_step, 1)
+            if parse_setting('fastscan', 'simulate'):
+                stream = self.streamer.simulate_single_shot(integration)
+            else:
+                stream = self.streamer.measure_single_shot(integration)
+
+            # projected = project(stream, self.dark_control,
+            #                     self.shaker_position_step, 1)
+            projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
+                                     adc_step=0.000152587890625, time_step=.05,
+                                     use_r0=True)
             res = fit_autocorrelation(projected)
             print('\n - fitted, result it: {}'.format(res['popt'][1]))
             centers.append(res['popt'][1])
@@ -963,7 +978,7 @@ class FastScanStreamer(QtCore.QObject):
 
         self.should_stop = True
 
-    def init_ni_channels(self):
+    def init_ni_channels(self): #TODO: choose channels from settings
 
         for k, v in parse_category('fastscan').items():
             setattr(self, k, v)

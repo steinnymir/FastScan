@@ -77,7 +77,7 @@ class FastScanMainWindow(QMainWindow):
         #   define attributes    #
         #########################
 
-        self.settings = parse_category('fastscan')  # import all
+        # self.settings = parse_category('fastscan')  # import all
 
         self.data_manager, self.data_manager_thread = self.initialize_data_manager()
 
@@ -414,6 +414,10 @@ class FastScanMainWindow(QMainWindow):
         acquisition_box_layout.addWidget(QLabel('Averages: '), 2, 0, 1, 1)
         acquisition_box_layout.addWidget(self.n_averages_spinbox, 2, 1, 1, 1)
 
+        self.shakercalib_btn = QPushButton('Calibrate!')
+        acquisition_box_layout.addWidget(self.shakercalib_btn, 2, 2, 1, 1)
+        self.shakercalib_btn.clicked.connect(self.try_shaker_calib)
+
         # ----------------------------------------------------------------------
         # Save Box
         # ----------------------------------------------------------------------
@@ -624,6 +628,10 @@ class FastScanMainWindow(QMainWindow):
         layout.addStretch()
         return widget
 
+
+    def try_shaker_calib(self):
+        self.data_manager.calibrate_shaker(5,2)
+
     def update_savename(self):
         name = self.save_name_ledit.text()
         write_setting(name,'paths','filename')
@@ -778,7 +786,6 @@ class FastScanMainWindow(QMainWindow):
         self.logger.info('Closing window: terminating all threads.')
         self.data_manager.close()
         self.data_manager_thread.exit()
-
 
 
 class PlotWidget(QWidget):
