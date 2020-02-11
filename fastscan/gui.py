@@ -622,9 +622,12 @@ class FastScanMainWindow(QMainWindow):
         self.start_iterative_measurement_button.clicked.connect(self.start_iterative_measurement)
 
         # layout.addWidget(shaker_calib_gbox)
+        try:
+            stage_control = StageController(Standa_8SMC5)
+            layout.addWidget(stage_control)
+        except NameError:
+            self.logger.debug('Failed loading stage controoler. Aborted gui element initialization')
 
-        stage_control = StageController(Standa_8SMC5)
-        layout.addWidget(stage_control)
         layout.addStretch()
         return widget
 
