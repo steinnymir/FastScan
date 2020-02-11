@@ -22,12 +22,9 @@
 
 import logging
 import multiprocessing as mp
-import os
-import sys
+import sys, os
 import time
 import traceback
-
-# import matplotlib TODO: uncomment when using shaker calibration
 import h5py
 import numpy as np
 import xarray as xr
@@ -42,16 +39,25 @@ except:
 
 from scipy.optimize import curve_fit
 
-# from instruments.cryostat import ITC503s as Cryostat
 from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fwhm, gaussian, transient_1expdec
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
     from fastscan.cscripts.project import project, project_r0
+
     print('Loaded Cython scripts')
 except:
-    print('warning: failed loading cython projector, loading python instead')
+    print('WARNING: failed loading cython projector, loading python instead')
     from .cscripts.projectPy import project, project_r0
+
+try:  # TODO: remove,
+    sys.path.append(parse_setting('paths', 'instruments_repo'))
+    from instruments.delaystage import DelayStage, Standa_8SMC5
+
+    # from instruments.cryostat import Cryostat
+    print('Loaded instruments')
+except:
+    print('WARNING: failed loading instruments repo')
 
 
 # -----------------------------------------------------------------------------
@@ -98,7 +104,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._calculate_autocorrelation = None
         self._recording_iteration = False  # for iterative temperature measurement
         self._max_avg_calc_time = 10
-        self._skip_average = 0  # number of iterations to skipp average calculation
+        self._skip_average = 0  # number of iterations to skip average calculation
         self._should_stop = False
         self._streamer_running = False
         self._current_iteration = None
@@ -109,6 +115,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._fit_lock = False
         self._autocorrelation_fit_result = None
 
+        # TODO: fix instrument management system
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
@@ -344,18 +351,20 @@ class FastScanThreadManager(QtCore.QObject):
         """
         self.newStreamerData.emit(streamer_data)
         t0 = time.time()
-        if self.streamer_average is None: # initialize average data container
+        # update raw streamer data average:
+        if self.streamer_average is None:  # initialize average data container
             self.streamer_average = streamer_data
             self._number_of_streamer_averages = 1
-        else: # recalculate average curve
+        else:  # recalculate average curve
             self._number_of_streamer_averages += 1
             self.streamer_average = update_average(streamer_data, self.streamer_average,
                                                    self._number_of_streamer_averages)
         self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
                                                                                   self._number_of_streamer_averages))
-        self._stream_queue.put(streamer_data) # add new data to
-        self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
 
+        #
+        self._stream_queue.put(streamer_data)  # add new data to
+        self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
 
     # ---------------------------------
     # data I/O
@@ -439,17 +448,26 @@ class FastScanThreadManager(QtCore.QObject):
         self.create_streamer()
 
         # stream = self.streamer.simulate_single_shot(integration)
-        stream = self.streamer.measure_single_shot(integration)
+        if parse_setting('fastscan', 'simulate'):
+            stream = self.streamer.simulate_single_shot(integration)
+        else:
+            stream = self.streamer.measure_single_shot(integration)
 
-        projected = project(stream, self.dark_control,
-                            self.shaker_position_step, 0.05)
+        # projected = project(stream, self.dark_control,
+        #                     self.shaker_position_step, 0.05)
+        projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
+                                 adc_step=0.000152587890625, time_step=.05,
+                                 use_r0=True)
         min_ = projected.time.min()
         max_ = projected.time.max()
         print('\n - ')
+        # generate a list of positions for the stage to move to
         calib_positions_ = np.linspace(min_ * .7, max_ * .7, iterations // 2)
         calib_positions = np.concatenate((calib_positions_, calib_positions_[::-1]))
         centers = []
+        # optional: shuffle the values  to reduce sistematic stage position errors:
         # np.random.shuffle(calib_positions)
+        # for each step measure and fit an autocorrelation curve, to establish the peak position
         for pos in calib_positions:
             print('\n - moving stage')
 
@@ -458,9 +476,16 @@ class FastScanThreadManager(QtCore.QObject):
                 write_setting(pos, 'fastscan - simulation', 'center_position')
 
             # stream = self.streamer.simulate_single_shot(integration)
-            stream = self.streamer.measure_single_shot(integration)
-            projected = project(stream, self.dark_control,
-                                self.shaker_position_step, 1)
+            if parse_setting('fastscan', 'simulate'):
+                stream = self.streamer.simulate_single_shot(integration)
+            else:
+                stream = self.streamer.measure_single_shot(integration)
+
+            # projected = project(stream, self.dark_control,
+            #                     self.shaker_position_step, 1)
+            projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
+                                     adc_step=0.000152587890625, time_step=.05,
+                                     use_r0=True)
             res = fit_autocorrelation(projected)
             print('\n - fitted, result it: {}'.format(res['popt'][1]))
             centers.append(res['popt'][1])
@@ -479,6 +504,7 @@ class FastScanThreadManager(QtCore.QObject):
 
         mean = np.mean(steps)
         std = np.std(steps)
+        # filter out outliers:
         good_steps = [x for x in steps if (np.abs(x - mean) < 2 * std)]
 
         # correction_factor = np.mean(calib_steps)/np.mean(steps)
@@ -952,7 +978,7 @@ class FastScanStreamer(QtCore.QObject):
 
         self.should_stop = True
 
-    def init_ni_channels(self):
+    def init_ni_channels(self):  # TODO: choose channels from settings
 
         for k, v in parse_category('fastscan').items():
             setattr(self, k, v)
