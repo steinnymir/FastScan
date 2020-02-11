@@ -25,8 +25,6 @@ import multiprocessing as mp
 import sys, os
 import time
 import traceback
-
-# import matplotlib TODO: uncomment when using shaker calibration
 import h5py
 import numpy as np
 import xarray as xr
@@ -41,25 +39,26 @@ except:
 
 from scipy.optimize import curve_fit
 
-# from instruments.cryostat import ITC503s as Cryostat
 from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fwhm, gaussian, transient_1expdec
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
     from fastscan.cscripts.project import project, project_r0
+
     print('Loaded Cython scripts')
 except:
     print('WARNING: failed loading cython projector, loading python instead')
     from .cscripts.projectPy import project, project_r0
 
-
-try: #TODO: remove,
-    sys.path.append(parse_setting('paths','instruments_repo'))
+try:  # TODO: remove,
+    sys.path.append(parse_setting('paths', 'instruments_repo'))
     from instruments.delaystage import DelayStage, Standa_8SMC5
+
     # from instruments.cryostat import Cryostat
     print('Loaded instruments')
 except:
     print('WARNING: failed loading instruments repo')
+
 
 # -----------------------------------------------------------------------------
 #       thread management
@@ -105,7 +104,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._calculate_autocorrelation = None
         self._recording_iteration = False  # for iterative temperature measurement
         self._max_avg_calc_time = 10
-        self._skip_average = 0  # number of iterations to skipp average calculation
+        self._skip_average = 0  # number of iterations to skip average calculation
         self._should_stop = False
         self._streamer_running = False
         self._current_iteration = None
@@ -116,8 +115,9 @@ class FastScanThreadManager(QtCore.QObject):
         self._fit_lock = False
         self._autocorrelation_fit_result = None
 
+        # TODO: fix instrument management system
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
-        self.delay_stage = DelayStage()
+        # self.delay_stage = DelayStage()
 
         self.fast_timer = QtCore.QTimer()
         self.fast_timer.setInterval(1)
@@ -352,10 +352,10 @@ class FastScanThreadManager(QtCore.QObject):
         self.newStreamerData.emit(streamer_data)
         t0 = time.time()
         # update raw streamer data average:
-        if self.streamer_average is None: # initialize average data container
+        if self.streamer_average is None:  # initialize average data container
             self.streamer_average = streamer_data
             self._number_of_streamer_averages = 1
-        else: # recalculate average curve
+        else:  # recalculate average curve
             self._number_of_streamer_averages += 1
             self.streamer_average = update_average(streamer_data, self.streamer_average,
                                                    self._number_of_streamer_averages)
@@ -363,9 +363,8 @@ class FastScanThreadManager(QtCore.QObject):
                                                                                   self._number_of_streamer_averages))
 
         #
-        self._stream_queue.put(streamer_data) # add new data to
+        self._stream_queue.put(streamer_data)  # add new data to
         self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
-
 
     # ---------------------------------
     # data I/O
@@ -456,8 +455,9 @@ class FastScanThreadManager(QtCore.QObject):
 
         # projected = project(stream, self.dark_control,
         #                     self.shaker_position_step, 0.05)
-        projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control, adc_step=0.000152587890625, time_step=.05,
-              use_r0=True)
+        projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
+                                 adc_step=0.000152587890625, time_step=.05,
+                                 use_r0=True)
         min_ = projected.time.min()
         max_ = projected.time.max()
         print('\n - ')
@@ -978,7 +978,7 @@ class FastScanStreamer(QtCore.QObject):
 
         self.should_stop = True
 
-    def init_ni_channels(self): #TODO: choose channels from settings
+    def init_ni_channels(self):  # TODO: choose channels from settings
 
         for k, v in parse_category('fastscan').items():
             setattr(self, k, v)
