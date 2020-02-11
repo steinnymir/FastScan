@@ -53,7 +53,7 @@ def project_r0(spos,signal,dark_control,reference,use_dark_control):
             result_ref[spos[i]-pos_min] += reference[i]
             norm_array[spos[i]-pos_min] += 1.
 
-    r0 = np.mean(result_ref/norm_array)
+    r0 = np.mean(np.nan_to_num(result_ref/norm_array))
     return result_val/(norm_array*r0)
 
 
