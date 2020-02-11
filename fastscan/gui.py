@@ -414,9 +414,9 @@ class FastScanMainWindow(QMainWindow):
         acquisition_box_layout.addWidget(QLabel('Averages: '), 2, 0, 1, 1)
         acquisition_box_layout.addWidget(self.n_averages_spinbox, 2, 1, 1, 1)
 
-        self.shakercalib_btn = QPushButton('Calibrate!')
-        acquisition_box_layout.addWidget(self.shakercalib_btn, 2, 2, 1, 1)
-        self.shakercalib_btn.clicked.connect(self.try_shaker_calib)
+        # self.shakercalib_btn = QPushButton('Calibrate!')
+        # acquisition_box_layout.addWidget(self.shakercalib_btn, 2, 2, 1, 1)
+        # self.shakercalib_btn.clicked.connect(self.try_shaker_calib)
 
         # ----------------------------------------------------------------------
         # Save Box
@@ -427,8 +427,8 @@ class FastScanMainWindow(QMainWindow):
         layout.addWidget(save_box)
 
         save_box.setLayout(savebox_layout)
-        h5_dir = parse_setting('paths', 'h5_data')
-        f_name = parse_setting('paths', 'filename')
+        h5_dir = parse_setting('paths', 'h5_data') # get directory from memory of last measurement
+        f_name = parse_setting('paths', 'filename') # get file name from memory of last measurement
 
         self.save_name_ledit = QLineEdit(f_name)
         savebox_layout.addWidget(QLabel('File Name:'), 0, 0)
@@ -450,7 +450,7 @@ class FastScanMainWindow(QMainWindow):
         savebox_layout.addWidget(self.save_data_button, 2, 1, 2, 2)
         self.save_data_button.clicked.connect(self.save_data)
 
-        # self.autosave_checkbox = QCheckBox('autosave')
+        # self.autosave_checkbox = QCheckBox('autosave') # TODO: make atuosave great again!
         # savebox_layout.addWidget(self.autosave_checkbox,3,0)
         # self.autosave_timeout = QDoubleSpinBox()
         # self.autosave_timeout.setValue(1)
@@ -631,7 +631,6 @@ class FastScanMainWindow(QMainWindow):
         layout.addStretch()
         return widget
 
-
     def try_shaker_calib(self):
         self.data_manager.calibrate_shaker(5,2)
 
@@ -663,15 +662,15 @@ class FastScanMainWindow(QMainWindow):
             fps = 0
 
 
-        string = 'Data Size :\n streamer: {} - {:10.3f} Kb\n projected: {} - {:10.3f} Kb\n Streams queued: {}\n Cycles per Second [Hz]: {:10.3f}       '.format(
+        string = 'Data Size :\n streamer: {} - {:10.3f} Kb\n projected: {} - {:10.3f} Kb\n Queues: Stream: {} Projected: {}\n Cycles per Second [Hz]: {:10.3f}       '.format(
             streamer_shape, np.prod(streamer_shape) / (1024),
             projected_shape, np.prod(projected_shape) / (1024),
             self.data_manager.stream_qsize,
+            self.data_manager.processed_qsize,
             fps,
 
         )
         self.datasize_label.setText(string)
-
 
     def initialize_data_manager(self):
 
