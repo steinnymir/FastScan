@@ -109,6 +109,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._spos_fit_pars = None  # initialize the fit parameters for shaker position
         self._counter = 0  # Counter for thread safe wait function
         self._calc_avg_with_worker = parse_setting('fastscan', 'avg_use_worker')
+        self._updating_avg = False
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
@@ -143,9 +144,9 @@ class FastScanThreadManager(QtCore.QObject):
                             )
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
-        if self._calc_avg_with_worker:
-            self.logger.debug('Launching new average updater')
-            self.update_average_worker() # start the average updater.
+#        if self._calc_avg_with_worker:
+#            self.logger.debug('Launching new average updater')
+#            self.update_average_worker() # start the average updater.
 
     def update_average_worker(self):
         new_projections = []
@@ -157,6 +158,7 @@ class FastScanThreadManager(QtCore.QObject):
                 break
         if len(new_projections) >0:
             self.logger.debug('Updating average with {} new projections'.format(len(new_projections)))
+            self._updating_avg = True
             runnable = Runnable(update_running_average,new_projections,self.all_curves,self.n_averages)
             self.pool.start(runnable)
             runnable.signals.result.connect(self.on_updated_running_average)
@@ -166,6 +168,8 @@ class FastScanThreadManager(QtCore.QObject):
     def on_updated_running_average(self, tpl):
         """ Store and emit new average dataset, and start a new average calculation"""
         self.all_curves, self.running_average, dt= tpl
+        self._updating_avg = False
+
         self.logger.debug('Updated average of {} curves in {} ms'.format(len(self.all_curves),dt*1000))
         self.newAverage.emit(self.running_average)
         if self._calculate_autocorrelation:
@@ -232,6 +236,9 @@ class FastScanThreadManager(QtCore.QObject):
          - to increase the _counter for 'wait' function
          - maybe other stuff too...
         """
+        if not self._updating_avg:
+            self.update_average_worker()
+
         # Stop the streamer if button was pressed
         if self._should_stop:
             self.logger.debug(
