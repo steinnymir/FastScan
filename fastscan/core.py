@@ -22,6 +22,7 @@
 
 import logging
 import multiprocessing as mp
+from queue import Empty
 import sys, os
 import time
 import traceback
@@ -39,7 +40,7 @@ except:
 
 from scipy.optimize import curve_fit
 
-from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fwhm, gaussian, transient_1expdec
+from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, update_running_average, gaussian_fwhm, gaussian, transient_1expdec
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
@@ -76,11 +77,8 @@ class FastScanThreadManager(QtCore.QObject):
     newAverage = QtCore.pyqtSignal(xr.DataArray)
     # acquisitionStopped = QtCore.pyqtSignal()
     # finished = QtCore.pyqtSignal()
-    # newData = QtCore.pyqtSignal(xr.DataArray)
-    completedIterativeMeasurement = QtCore.pyqtSignal()
+    # newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(Exception)
-
-    # fitNewCurve = QtCore.pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -91,57 +89,50 @@ class FastScanThreadManager(QtCore.QObject):
         # multiprocessing variables
         self._stream_queue = mp.Queue()  # Queue where to store unprocessed streamer data
         self._processed_queue = mp.Queue()  # Queue where to store projected data
-        self.threadPool = QtCore.QThreadPool()
-        self.threadPool.setMaxThreadCount(self.n_processors)
+        self.pool = QtCore.QThreadPool()
+        self.pool.setMaxThreadCount(self.n_processors)
 
         # Data containers
-        self.all_curves = None
-        self.running_average = None
-        self.streamer_average = None
-        self._number_of_streamer_averages = 0
+        self.all_curves = None  # xarray containing all projected curves
+        self.running_average = None  # xarray containing average of projected curves
+        self.streamer_average = None  # np.array containing the average of streamer data #TODO: assert if this contains only last n averages as it should.
+        self.n_streamer_averages = 0
 
         # running control parameters
-        self._calculate_autocorrelation = None
+        self._calculate_autocorrelation = None  # if true enables the autocorrelation fitting method to run
         self._recording_iteration = False  # for iterative temperature measurement
-        self._max_avg_calc_time = 10
-        self._skip_average = 0  # number of iterations to skip average calculation
-        self._should_stop = False
-        self._streamer_running = False
-        self._current_iteration = None
+        self._max_avg_calc_time = 10  # maximum time (ms) it should take to calculate a new average
+        self._skip_average = 0  # number of iterations to skipp average calculation
+        self._should_stop = False  # when true stops the data acquisition as soon as possible
+        self._streamer_running = False  # flag for chekcing weather the acquisition is running
+        self._current_iteration = None  # keep track of which is the current iteration in the iterative measurement method.
         self._spos_fit_pars = None  # initialize the fit parameters for shaker position
         self._counter = 0  # Counter for thread safe wait function
-        self._has_new_projected_data = False
-        self._calculating_average = False
-        self._fit_lock = False
-        self._autocorrelation_fit_result = None
-
-        # TODO: fix instrument management system
+        self._calc_avg_with_worker = parse_setting('fastscan', 'avg_use_worker')
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
-        self.fast_timer = QtCore.QTimer()
-        self.fast_timer.setInterval(1)
-        self.fast_timer.timeout.connect(self.on_fast_timer)
-        self.fast_timer.start()
-
-        self.slow_timer = QtCore.QTimer()
-        self.slow_timer.setInterval(200)
-        self.slow_timer.timeout.connect(self.on_slow_timer)
-        self.slow_timer.start()
+        self.timer = QtCore.QTimer()
+        self.timer.setInterval(1)
+        self.timer.timeout.connect(self.on_timer)
+        self.timer.start()
 
         # self.create_streamer()
 
-    def start_projector(self, stream_data):
+    # data processing threads
+
+    def start_projector_worker(self, stream_data):
         """ Uses a thread to project stream data into pump-probe time scale.
 
-        Launch a runnable thread from the threadPool to convert data from streamer
-        into the correct time scale.
+        Launch a runnable thread from the pool to convert data from streamer
+        into the correct time scale. When the projection is complete, a signal
+        passes the result to self.on_projector_data method.
 
         Args:
             stream_data: np.array
                 data acquired by streamer.
         """
-        self.logger.debug('Starting projector'.format(stream_data.shape))
+        self.logger.debug('Starting projector')
         runnable = Runnable(projector,
                             stream_data=stream_data,
                             spos_fit_pars=self._spos_fit_pars,
@@ -150,12 +141,52 @@ class FastScanThreadManager(QtCore.QObject):
                             time_step=self.shaker_time_step,
                             use_r0=self.use_r0,
                             )
-        self.threadPool.start(runnable)
+        self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
+        if self._calc_avg_with_worker:
+            self.logger.debug('Launching new average updater')
+            self.update_average_worker() # start the average updater.
 
-    # ---------------------------------
+    def update_average_worker(self):
+        new_projections = []
+        for  i in range(self.processed_qsize):
+            tmp = self._processed_queue.get()
+            if tmp is not None:
+                new_projections.append(tmp)
+            else:
+                break
+        if len(new_projections) >0:
+            self.logger.debug('Updating average with {} new projections'.format(len(new_projections)))
+            runnable = Runnable(update_running_average,new_projections,self.all_curves,self.n_averages)
+            self.pool.start(runnable)
+            runnable.signals.result.connect(self.on_updated_running_average)
+        else:
+            self.logger.debug('no projections to work on....')
+
+    def on_updated_running_average(self, tpl):
+        """ Store and emit new average dataset, and start a new average calculation"""
+        self.all_curves, self.running_average, dt= tpl
+        self.logger.debug('Updated average of {} curves in {} ms'.format(len(self.all_curves),dt*1000))
+        self.newAverage.emit(self.running_average)
+        if self._calculate_autocorrelation:
+            self.start_autocorrelation_worker(self.running_average)
+        if not self._should_stop:
+            self.update_average_worker()
+
+    def start_autocorrelation_worker(self, da):
+        """ Uses a thread to fit the autocorrelation function to the projected data.
+
+        Args:
+            da: xarray.DataArray
+                data after projection processing.
+        """
+        runnable = Runnable(fit_autocorrelation, da, expected_pulse_duration=.1)
+        self.pool.start(runnable)
+        runnable.signals.result.connect(self.on_fit_result)
+        # runnable.signals.result.connect(self.newFitResult.emit)
+
     # Streamer management methods
-    # ---------------------------------
+
     def create_streamer(self):
         """ Generate the streamer thread.
 
@@ -166,7 +197,6 @@ class FastScanThreadManager(QtCore.QObject):
         self.streamer = FastScanStreamer()
         self.streamer.newData[np.ndarray].connect(self.on_streamer_data)
         self.streamer.error.connect(self.error.emit)
-        self.streamer.finished.connect(self.streamer_thread.exit)
         self.streamer.moveToThread(self.streamer_thread)
         self.streamer_thread.started.connect(self.streamer.start_acquisition)
 
@@ -182,34 +212,18 @@ class FastScanThreadManager(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def stop_streamer(self):
-        """ Stop the acquisition thread."""
-        # self.logger.debug('\n\nFastScan Streamer is stopping.\n\n')
-        self.logger.info(' ---- Acquisition Stopped! ----')
+        """ Soft stop order for streamer.
+
+        Streamer is set to stop at the next iteration.
+        """
+        self.logger.debug('\n\nFastScan Streamer is stopping.\n\n')
         self.streamer.stop_acquisition()
         self._should_stop = True
-        self._streamer_running = False
 
-    # def create_fitter(self):
-    #     """ Generate the streamer thread.
-    #
-    #     This creates the thread which will acquire data from the ADC.
-    #     """
-    #
-    #     self.fitting_thread = QtCore.QThread()
-    #     self.fitter = Fitter_autocorrelation()#self.running_average, self._autocorrelation_fit_result)
-    #     self.fitter.fitResult[dict].connect(self.on_fit_result)
-    #     self.fitter.finished.connect(self.fitting_thread.exit)
-    #     self.fitter.error.connect(self.error.emit)
-    #
-    #     self.fitNewCurve.connect(self.fitter.run)
-    #     self.fitter.moveToThread(self.fitting_thread)
-    #     self.fitting_thread.started.connect(self.fitter.run)
+    # data handling pipeline
 
-    # ---------------------------------
-    # timing triggers
-    # ---------------------------------
     @QtCore.pyqtSlot()
-    def on_fast_timer(self):
+    def on_timer(self):
         """ Timer event.
 
         This is used for multiple purpouses:
@@ -230,145 +244,150 @@ class FastScanThreadManager(QtCore.QObject):
         try:
             if not self._stream_queue.empty():
                 _to_project = self._stream_queue.get()
-                self.start_projector(_to_project)
+                self.start_projector_worker(_to_project)
                 self.logger.debug(
                     'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
         except Exception as e:
             self.logger.debug('Queue error: {}'.format(e))
 
+        # when projected data is available, calculate the new average
+        # try:
+        #     if not self._stream_queue.empty():
+        #         _to_project = self._stream_queue.get()
+        #         self.start_projector_worker(_to_project)
+        #         self.logger.debug(
+        #             'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
+        # except Exception as e:
+        #     self.logger.debug('Queue error: {}'.format(e))
+
+        # manage iterative measurement. Start next step whien n_averages has been reached.
         if self._recording_iteration:
-            if isinstance(self.all_curves, xr.DataArray) and self.all_curves.shape[0] == self.n_averages:
-                self.logger.info('n of averages reached: ending iteration step')
-                self.end_iteration_step()
+            try:
+                if self.all_curves.shape[0] == self.n_averages:
+                    self.logger.info('n of averages reached: ending iteration step')
+                    self.end_iteration_step()
+            except AttributeError as e:
+                pass
 
         self._counter += 1  # increase the waiting counter
-
-    @QtCore.pyqtSlot()
-    def on_slow_timer(self):
-        # calculate new average:
-
-        if isinstance(self.all_curves, xr.DataArray) \
-                and 'avg' in self.all_curves.dims \
-                and self._has_new_projected_data:
-            self._has_new_projected_data = False
-            self.logger.debug('Calculating average...')
-
-            def f(da):
-                return da.mean('avg').dropna('time')
-
-            runnable = Runnable(f, self.all_curves)
-            self.threadPool.start(runnable)
-
-            runnable.signals.result.connect(self.on_avg_data)
-
-        # calculate autocorrelation
-        if self._calculate_autocorrelation and \
-                not self._fit_lock and \
-                self.running_average is not None and \
-                self._streamer_running:
-            self._fit_lock = True
-            runnable = Runnable(fit_autocorrelation_wings, self.running_average, self._autocorrelation_fit_result)
-            self.threadPool.start(runnable)
-            runnable.signals.result.connect(self.on_fit_result)
-
-            # if not hasattr(self, 'fitter'):
-            #     self.create_fitter()
-            # self.fitting_thread.stopped.connect(self.kill_streamer_thread)
-            # self.fitter = Fitter_autocorrelation(self.running_average, self._autocorrelation_fit_result)
-            # self.fitter.fitResult[dict].connect(self.on_fit_result)
-            # self.fitter.moveToThread(self.fitting_thread)
-            # self.fitting_thread.started.connect(self.fitter.run)
-            # self.fitting_thread.start()
-
-            # self.fitter.run(self.running_average)
-            # if not hasattr(self,'fitting_thread'):
-            #     self.fitting_thread = QtCore.QThread()
-            #     # self.fitting_thread.stopped.connect(self.kill_streamer_thread)
-            # self._fit_lock = True
-            # self.fitter = Fitter_autocorrelation(self.running_average,prevFitResults=self._autocorrelation_fit_result,n_wings=2)
-            # self.fitter.fitResult[dict].connect(self.on_fit_result)
-            # # self.fitter.error.connect(self.raise_thread_error)
-            #
-            # self.fitter.moveToThread(self.fitting_thread)
-            # self.fitting_thread.started.connect(self.fitter.run)
-            # self.fitting_thread.start()
-
-    # ---------------------------------
-    # data handling pipeline
-    # ---------------------------------
-
-    @QtCore.pyqtSlot(dict)
-    def on_fit_result(self, fitDict):
-        self.logger.debug('emitting fit results')
-        if fitDict['curve'] is not None:
-            self.newFitResult.emit(fitDict)
-            print(fitDict)
-            print(self.running_average)
-            self._autocorrelation_fit_result = fitDict
-        self._fit_lock = False
-
-    @QtCore.pyqtSlot(xr.DataArray)
-    def on_avg_data(self, da):
-
-        # self._calculating_average = False
-        self.running_average = da
-        self.newAverage.emit(da)
-
-    @QtCore.pyqtSlot(tuple)  # xr.DataArray, list)
-    def on_projector_data(self, processed_dataarray_tuple):
-        """ Slot to handle processed data.
-
-        Processed data is first emitted to the main window for plotting etc...
-        Then, the running average of the pump-probe data is updated, and also
-        emitted. Finally, if the option 'self._calculate_autocorrelation' is on,
-        it launches the thread to calculate the autocorrelation function.
-
-        This emits data to the main window, so it can be plotted..."""
-        processed_dataarray, spos_fit_pars = processed_dataarray_tuple
-
-        self.newProcessedData.emit(processed_dataarray)
-        self.spos_fit_pars = spos_fit_pars
-        t0 = time.time()
-
-        if self.all_curves is None:
-            self.all_curves = processed_dataarray
-        else:
-            try:
-                self.all_curves = xr.concat([self.all_curves[-self.n_averages + 1:], processed_dataarray], 'avg')
-            except:
-                raise Exception('failed calculating average: probably wrong version of xarray (0.10.3 works)')
-        self._has_new_projected_data = True
-
-        self.logger.debug('Updating dataset: {:.2f} ms'.format((time.time() - t0) * 1000))
 
     @QtCore.pyqtSlot(np.ndarray)
     def on_streamer_data(self, streamer_data):
         """ Slot to handle streamer data.
 
-        Upon recieving streamer data from the streamer thread, this updates the
-        running average of raw data (streamer data) and adds the data to the
-        streamer data queue, ready to be processed by a processor thread.
-        """
-        self.newStreamerData.emit(streamer_data)
-        t0 = time.time()
-        # update raw streamer data average:
-        if self.streamer_average is None:  # initialize average data container
-            self.streamer_average = streamer_data
-            self._number_of_streamer_averages = 1
-        else:  # recalculate average curve
-            self._number_of_streamer_averages += 1
-            self.streamer_average = update_average(streamer_data, self.streamer_average,
-                                                   self._number_of_streamer_averages)
-        self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
-                                                                                  self._number_of_streamer_averages))
+        Performs the following actions in this order:
 
-        #
-        self._stream_queue.put(streamer_data)  # add new data to
+        1. Emit raw stramer data for plotting
+        2. add stramer data to streamer queue, ready to be projected.
+        3. update streamer average and keep count of how many we averaged
+
+        Args:
+            streamer_data: np.ndarray(N,M)
+                array of dimension (N,M) where N is the number of different
+                channels aquired, and M the number of samples (laser pulses)
+                recorded at each trigger (shaker cycle)
+
+        """
+        # emit data for plotting
+        self.newStreamerData.emit(streamer_data)
+
+        # add data to stream, for projection
+        self._stream_queue.put(streamer_data)
         self.logger.debug('Added data to stream queue, with shape {}'.format(streamer_data.shape))
 
-    # ---------------------------------
+        t0 = time.time()
+        if self.streamer_average is None:
+            self.streamer_average = streamer_data
+            self.n_streamer_averages = 1
+        else:
+            self.n_streamer_averages += 1
+            self.streamer_average = update_average(streamer_data, self.streamer_average, self.n_streamer_averages)
+        self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
+                                                                                  self.n_streamer_averages))
+
+    @QtCore.pyqtSlot(tuple)
+    def on_projector_data(self, processed_dataarray_tuple):
+        """ Slot to handle processed data.
+
+        In input there comes a tuple containing an xarray of the projected data
+        together with the fit parameters for the sine shape of the shaker position.
+
+        This method then performs the following actions in this order:
+        1. emit data for plotting.
+        2. add data to the processed queue, ready for updating the runnning average
+        3. if the counter _skip_average has reached 0, it recalculates the
+        running average and emits it for plotting. Furthermore, measures how
+        long calculating this took, and based on this time, it then defines how
+        many cycles of this method it should wait (how many times it should get
+        projected data - how many shaker cycles) before updating the average
+        again. If the counter _skip_average has not reached 0, it decreases it by 1.
+        4. If the autocorrelation is flagged true, it starts an autocorrelation
+        fitting thread.
+
+        """
+        self.logger.debug('received processed data array')
+
+        processed_dataarray, self._spos_fit_pars = processed_dataarray_tuple
+        # send data to GUI for plotting "last curve"
+        self.newProcessedData.emit(processed_dataarray)
+        # add to queue for average calculation
+        self._processed_queue.put(processed_dataarray)
+        self.logger.debug('Added processed curve to queue')
+
+        if not self._calc_avg_with_worker:
+
+            if self._skip_average == 0:
+                self.logger.debug('\nstarting average calculation: {} elements in queue'.format(self.processed_qsize))
+
+                t0 = time.time()
+                all_last_projected = []
+
+                # take all elements available in processor queue and calculate the new running average.
+                for i in range(self.processed_qsize):
+                    try:
+                        tmp = self._processed_queue.get(block=True, timeout=0.01).dropna('time')
+                        if tmp is not None:
+                            all_last_projected.append(tmp)  # drop values where no data was recorded (nans)
+                    except Empty:  # bad method. one should NEVER catch queue empty errors... unreliable!!
+                        self.logger.debug('queue reported empty. actual size: {}'.format(self.processed_qsize))
+                        pass
+                self.logger.debug('\n{} elements taken from the processed queue'.format(len(all_last_projected)))
+
+                # if all_curves is not initialized yet, take one of the projected datasets and use it as first average
+                if self.all_curves is None:
+                    self.all_curves = processed_dataarray
+                    self.running_average = all_last_projected.pop(0).dropna('time')
+
+                # concatenate all (remaining) averages into the running average, using xarray methods for better aligning time axis
+                n_left = len(all_last_projected)
+                if n_left > 0:
+                    self.all_curves = xr.concat([self.all_curves[-self.n_averages + n_left:], *all_last_projected], 'avg')
+                    self.running_average = self.all_curves.mean('avg').dropna('time')
+
+                self.newAverage.emit(self.running_average)
+
+                # evaluate how long it took to update the average, and define how many cycles to skip based on the "maximum
+                # processing time" defined in self._max_avg_calc_time. This should be much shorter than one cycle of the
+                # shaker (1/10th)
+                t_tot = (time.time() - t0) * 1000
+                if t_tot > self._max_avg_calc_time:
+                    self._skip_average = t_tot // self._max_avg_calc_time
+                self.logger.debug('calculated average in {:.2f} ms'.format(t_tot))
+            else:
+                self.logger.debug(
+                    'skipping average calculation, {} , queue size: {}'.format(-self._skip_average, self.processed_qsize))
+                self._skip_average -= 1
+
+            if self._calculate_autocorrelation:
+                self.start_autocorrelation_worker(self.running_average)
+
+    @QtCore.pyqtSlot(dict)
+    def on_fit_result(self, fitDict):
+        """ Slot to bounce the fit result signal."""
+        self.newFitResult.emit(fitDict)
+
     # data I/O
-    # ---------------------------------
+
     @QtCore.pyqtSlot()
     def reset_data(self):
         """ Reset the data in memory, by reinitializing all data containers.
@@ -376,7 +395,7 @@ class FastScanThreadManager(QtCore.QObject):
         # TODO: add popup check window
         self.running_average = None
         self.all_curves = None
-        self._number_of_streamer_averages = None
+        self.n_streamer_averages = None
         self.streamer_average = None
 
     def save_data(self, filename, all_data=True):
@@ -398,13 +417,9 @@ class FastScanThreadManager(QtCore.QObject):
         """
         if not '.h5' in filename:
             filename += '.h5'
-        if not os.path.isdir(os.path.split(filename)[0]):
-            raise NotADirectoryError
-        elif os.path.isfile(filename):
-            raise FileExistsError
-        elif self.streamer_average is None:
-            raise NoDataException
-        else:
+
+        if self.streamer_average is not None:
+
             with h5py.File(filename, 'w') as f:
 
                 f.create_dataset('/raw/avg', data=self.streamer_average)
@@ -420,9 +435,13 @@ class FastScanThreadManager(QtCore.QObject):
                     else:
                         f.create_dataset('/settings/{}'.format(k), data=v)
 
-    # ---------------------------------
+
+        else:
+            self.logger.info('no data to save yet...')
+            # f.create_group('/settings')
+
     # shaker calibration
-    # ---------------------------------
+
     def calibrate_shaker(self, iterations, integration):
         """
         Shaker calibration method.
@@ -448,26 +467,17 @@ class FastScanThreadManager(QtCore.QObject):
         self.create_streamer()
 
         # stream = self.streamer.simulate_single_shot(integration)
-        if parse_setting('fastscan', 'simulate'):
-            stream = self.streamer.simulate_single_shot(integration)
-        else:
-            stream = self.streamer.measure_single_shot(integration)
+        stream = self.streamer.measure_single_shot(integration)
 
-        # projected = project(stream, self.dark_control,
-        #                     self.shaker_position_step, 0.05)
-        projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
-                                 adc_step=0.000152587890625, time_step=.05,
-                                 use_r0=True)
+        projected = project(stream, self.dark_control,
+                            self.shaker_position_step, 0.05)
         min_ = projected.time.min()
         max_ = projected.time.max()
         print('\n - ')
-        # generate a list of positions for the stage to move to
         calib_positions_ = np.linspace(min_ * .7, max_ * .7, iterations // 2)
         calib_positions = np.concatenate((calib_positions_, calib_positions_[::-1]))
         centers = []
-        # optional: shuffle the values  to reduce sistematic stage position errors:
         # np.random.shuffle(calib_positions)
-        # for each step measure and fit an autocorrelation curve, to establish the peak position
         for pos in calib_positions:
             print('\n - moving stage')
 
@@ -476,16 +486,9 @@ class FastScanThreadManager(QtCore.QObject):
                 write_setting(pos, 'fastscan - simulation', 'center_position')
 
             # stream = self.streamer.simulate_single_shot(integration)
-            if parse_setting('fastscan', 'simulate'):
-                stream = self.streamer.simulate_single_shot(integration)
-            else:
-                stream = self.streamer.measure_single_shot(integration)
-
-            # projected = project(stream, self.dark_control,
-            #                     self.shaker_position_step, 1)
-            projected, _ = projector(stream, spos_fit_pars=None, use_dark_control=self.dark_control,
-                                     adc_step=0.000152587890625, time_step=.05,
-                                     use_r0=True)
+            stream = self.streamer.measure_single_shot(integration)
+            projected = project(stream, self.dark_control,
+                                self.shaker_position_step, 1)
             res = fit_autocorrelation(projected)
             print('\n - fitted, result it: {}'.format(res['popt'][1]))
             centers.append(res['popt'][1])
@@ -504,7 +507,6 @@ class FastScanThreadManager(QtCore.QObject):
 
         mean = np.mean(steps)
         std = np.std(steps)
-        # filter out outliers:
         good_steps = [x for x in steps if (np.abs(x - mean) < 2 * std)]
 
         # correction_factor = np.mean(calib_steps)/np.mean(steps)
@@ -540,9 +542,8 @@ class FastScanThreadManager(QtCore.QObject):
 
         plt.show()
 
-    # ---------------------------------
     # iterative temperature measurement
-    # ---------------------------------
+
     def start_iterative_measurement(self, temperatures, savename):
         """ Starts a temperature dependence scan series.
 
@@ -573,20 +574,18 @@ class FastScanThreadManager(QtCore.QObject):
         Initialize the next measurement iteration in the temperature dependence
         scan series.
         """
-        if self._streamer_running:
-            self.stop_streamer()
+        self.stop_streamer()
 
         if self._current_iteration >= len(self.temperatures):
             self._current_iteration = None
+            print('\n\n\n\nMEASUREMENT FINISHED\n\n\n')
             self.logger.info('Iterative mesasurement complete!!')
-            self.completedIterativeMeasurement.emit()
-
         else:
             self.cryo.connect()
             self.logger.info('Connected to Cryostat: setting temperature....')
             self.cryo.set_temperature(self.temperatures[self._current_iteration])
             runnable = Runnable(self.cryo.check_temp, tolerance=.1, sleep_time=1)
-            self.threadPool.start(runnable)
+            self.pool.start(runnable)
             runnable.signals.finished.connect(self.measure_current_iteration)
 
     @QtCore.pyqtSlot()
@@ -604,7 +603,6 @@ class FastScanThreadManager(QtCore.QObject):
     @QtCore.pyqtSlot()
     def end_iteration_step(self):
         """ Complete and finalize the current measurement iteration."""
-
         self.logger.info('Stopping iteration')
         self._recording_iteration = False
 
@@ -976,7 +974,7 @@ class FastScanStreamer(QtCore.QObject):
 
         self.init_ni_channels()
 
-        self.should_stop = True
+        self.should_stop = True  # when true it does not start a new measurement iteration.
 
     def init_ni_channels(self):  # TODO: choose channels from settings
 
@@ -1243,6 +1241,8 @@ def simulate_measure(data, function='sech2_fwhm', args=[.5, -2, .085, 1],
     data[1, ::2] = f(data[0, ::2], *args_) + noise[::2] + data[0, ::2] / 3
     data[2, ::2] = True
     data[2, 1::2] = False
+    if data.shape[0] == 4:
+        data[3, :] = 2
 
     return data
 

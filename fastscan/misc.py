@@ -23,16 +23,16 @@ import ast
 import os
 import sys
 from configparser import ConfigParser
-
+import time
 import h5py
 import numpy as np
+import math
 import xarray as xr
 from PyQt5 import QtWidgets
 
 
-# -------------------------
 # Qt stuff
-# -------------------------
+
 def my_exception_hook(exctype, value, traceback):
     """error catching for qt in pycharm"""
     # Print the error and traceback
@@ -59,9 +59,8 @@ def labeledQwidget(label, widget, align='h'):
     return w
 
 
-# -------------------------
 # Settings persing
-# -------------------------
+
 def parse_category(category, settings_file='default'):
     """ parse setting file and return desired value
 
@@ -154,15 +153,51 @@ def write_setting(value, category, name, settings_file='default'):
         settings.write(configfile)
 
 
-# -------------------------
 # math
-# -------------------------
 
 def update_average(new, avg, n):
-    'recalculate average with new dataset.'
+    """ Update the average with new array.
+
+    Args
+        new: np.array
+            array with the new data to be added to the average. Must have same
+            dimensions as avg
+        avg: np.array
+            array of average of n arrays
+        n:
+            number n of arrays used to make avg
+    :return:
+        new average
+    """
     prev_n = (n - 1) / n
     # return (avg  * (n - 1) + new) / n
     return avg * prev_n + new / n
+
+def update_running_average(new_data, all_curves, max_n_avg):
+    """ update the average dataset with new data
+
+    Args:
+        new_data: list of xarray.DataArray
+            list of new projected data curves to be combined in the new average
+        all_curves: xarray
+            data container with all previous datasets
+        max_n_avg: int
+            number ov averages to keep in memory
+    Return:
+        out: tuple of two xarrays
+            tuple containin the new all_curves xarray and the new running average xarray
+        """
+    t0 = time.time()
+    for data in new_data:
+        data.dropna('time')
+    if all_curves is None:
+        new_all_curves = xr.concat([*new_data],'avg')
+    else:
+        new_all_curves = xr.concat([all_curves[-max_n_avg + len(new_data):], *new_data], 'avg')
+    running_average = new_all_curves.mean('avg').dropna('time')
+    dt = time.time()-t0
+    return (new_all_curves, running_average,dt)
+
 
 
 def sin(x, A, f, p, o):
@@ -223,8 +258,22 @@ def read_h5(file):
     return dd
 
 
-# -------------------------
+def repr_byte_size(size_bytes):
+    """ Represent in a string the size in Bytes in a compact format.
+
+    Adapted from https://stackoverflow.com/questions/5194057/better-way-to-convert-file-sizes-in-python
+    Follows same notation as Windows does for files. See: https://en.wikipedia.org/wiki/Mebibyte
+    """
+    if size_bytes == 0:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return "%s %s" % (s, size_name[i])
+
+
 # exceptions
-# -------------------------
+
 class NoDataException(Exception):
     pass
