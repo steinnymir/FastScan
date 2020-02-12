@@ -23,7 +23,7 @@ import ast
 import os
 import sys
 from configparser import ConfigParser
-
+import time
 import h5py
 import numpy as np
 import math
@@ -172,6 +172,32 @@ def update_average(new, avg, n):
     prev_n = (n - 1) / n
     # return (avg  * (n - 1) + new) / n
     return avg * prev_n + new / n
+
+def update_running_average(new_data, all_curves, max_n_avg):
+    """ update the average dataset with new data
+
+    Args:
+        new_data: list of xarray.DataArray
+            list of new projected data curves to be combined in the new average
+        all_curves: xarray
+            data container with all previous datasets
+        max_n_avg: int
+            number ov averages to keep in memory
+    Return:
+        out: tuple of two xarrays
+            tuple containin the new all_curves xarray and the new running average xarray
+        """
+    t0 = time.time()
+    for data in new_data:
+        data.dropna('time')
+    if all_curves is None:
+        new_all_curves = xr.concat([*new_data],'avg')
+    else:
+        new_all_curves = xr.concat([all_curves[-max_n_avg + len(new_data):], *new_data], 'avg')
+    running_average = new_all_curves.mean('avg').dropna('time')
+    dt = time.time()-t0
+    return (new_all_curves, running_average,dt)
+
 
 
 def sin(x, A, f, p, o):

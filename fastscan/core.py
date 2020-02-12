@@ -40,7 +40,7 @@ except:
 
 from scipy.optimize import curve_fit
 
-from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, gaussian_fwhm, gaussian, transient_1expdec
+from .misc import sech2_fwhm, sech2_fwhm_wings, sin, update_average, update_running_average, gaussian_fwhm, gaussian, transient_1expdec
 from .misc import parse_setting, parse_category, write_setting, NoDataException
 
 try:
@@ -108,7 +108,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._current_iteration = None  # keep track of which is the current iteration in the iterative measurement method.
         self._spos_fit_pars = None  # initialize the fit parameters for shaker position
         self._counter = 0  # Counter for thread safe wait function
-
+        self._calc_avg_with_worker = True
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
@@ -121,7 +121,7 @@ class FastScanThreadManager(QtCore.QObject):
 
     # data processing threads
 
-    def start_projector(self, stream_data):
+    def start_projector_worker(self, stream_data):
         """ Uses a thread to project stream data into pump-probe time scale.
 
         Launch a runnable thread from the pool to convert data from streamer
@@ -132,7 +132,7 @@ class FastScanThreadManager(QtCore.QObject):
             stream_data: np.array
                 data acquired by streamer.
         """
-        self.logger.debug('Starting projector'.format(stream_data.shape))
+        self.logger.debug('Starting projector')
         runnable = Runnable(projector,
                             stream_data=stream_data,
                             spos_fit_pars=self._spos_fit_pars,
@@ -143,8 +143,37 @@ class FastScanThreadManager(QtCore.QObject):
                             )
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
+        if self._calc_avg_with_worker:
+            self.logger.debug('Launching new average updater')
+            self.update_average_worker() # start the average updater.
 
-    def fit_autocorrelation(self, da):
+    def update_average_worker(self):
+        new_projections = []
+        for  i in range(self.processed_qsize):
+            tmp = self._processed_queue.get()
+            if tmp is not None:
+                new_projections.append(tmp)
+            else:
+                break
+        if len(new_projections) >0:
+            self.logger.debug('Updating average with {} new projections'.format(len(new_projections)))
+            runnable = Runnable(update_running_average,new_projections,self.all_curves,self.n_averages)
+            self.pool.start(runnable)
+            runnable.signals.result.connect(self.on_updated_running_average)
+        else:
+            self.logger.debug('no projections to work on....')
+
+    def on_updated_running_average(self, tpl):
+        """ Store and emit new average dataset, and start a new average calculation"""
+        self.all_curves, self.running_average, dt= tpl
+        self.logger.debug('Updated average of {} curves in {} ms'.format(len(self.all_curves),dt*1000))
+        self.newAverage.emit(self.running_average)
+        if self._calculate_autocorrelation:
+            self.start_autocorrelation_worker(self.running_average)
+        if not self._should_stop:
+            self.update_average_worker()
+
+    def start_autocorrelation_worker(self, da):
         """ Uses a thread to fit the autocorrelation function to the projected data.
 
         Args:
@@ -215,7 +244,7 @@ class FastScanThreadManager(QtCore.QObject):
         try:
             if not self._stream_queue.empty():
                 _to_project = self._stream_queue.get()
-                self.start_projector(_to_project)
+                self.start_projector_worker(_to_project)
                 self.logger.debug(
                     'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
         except Exception as e:
@@ -225,7 +254,7 @@ class FastScanThreadManager(QtCore.QObject):
         # try:
         #     if not self._stream_queue.empty():
         #         _to_project = self._stream_queue.get()
-        #         self.start_projector(_to_project)
+        #         self.start_projector_worker(_to_project)
         #         self.logger.debug(
         #             'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
         # except Exception as e:
@@ -276,8 +305,6 @@ class FastScanThreadManager(QtCore.QObject):
         self.logger.debug('{:.2f} ms| Streamer average updated ({} scans)'.format((time.time() - t0) * 1000,
                                                                                   self.n_streamer_averages))
 
-
-
     @QtCore.pyqtSlot(tuple)
     def on_projector_data(self, processed_dataarray_tuple):
         """ Slot to handle processed data.
@@ -298,56 +325,61 @@ class FastScanThreadManager(QtCore.QObject):
         fitting thread.
 
         """
+        self.logger.debug('received processed data array')
+
         processed_dataarray, self._spos_fit_pars = processed_dataarray_tuple
         # send data to GUI for plotting "last curve"
         self.newProcessedData.emit(processed_dataarray)
         # add to queue for average calculation
         self._processed_queue.put(processed_dataarray)
+        self.logger.debug('Added processed curve to queue')
 
-        if self._skip_average == 0:
-            self.logger.debug('\nstarting average calculation: {} elements in queue'.format(self.processed_qsize))
+        if not self._calc_avg_with_worker:
 
-            t0 = time.time()
-            all_last_projected = []
+            if self._skip_average == 0:
+                self.logger.debug('\nstarting average calculation: {} elements in queue'.format(self.processed_qsize))
 
-            # take all elements available in processor queue and calculate the new running average.
-            for i in range(self.processed_qsize):
-                try:
-                    tmp = self._processed_queue.get(block=True, timeout=0.01).dropna('time')
-                    if tmp is not None:
-                        all_last_projected.append(tmp)  # drop values where no data was recorded (nans)
-                except Empty: # bad method. one should NEVER catch queue empty errors... unreliable!!
-                    self.logger.debug('queue reported empty. actual size: {}'.format(self.processed_qsize))
-                    pass
-            self.logger.debug('\n{} elements taken from the processed queue'.format(len(all_last_projected)))
+                t0 = time.time()
+                all_last_projected = []
 
-            # if all_curves is not initialized yet, take one of the projected datasets and use it as first average
-            if self.all_curves is None:
-                self.all_curves = processed_dataarray
-                self.running_average = all_last_projected.pop(0).dropna('time')
+                # take all elements available in processor queue and calculate the new running average.
+                for i in range(self.processed_qsize):
+                    try:
+                        tmp = self._processed_queue.get(block=True, timeout=0.01).dropna('time')
+                        if tmp is not None:
+                            all_last_projected.append(tmp)  # drop values where no data was recorded (nans)
+                    except Empty:  # bad method. one should NEVER catch queue empty errors... unreliable!!
+                        self.logger.debug('queue reported empty. actual size: {}'.format(self.processed_qsize))
+                        pass
+                self.logger.debug('\n{} elements taken from the processed queue'.format(len(all_last_projected)))
 
-            # concatenate all (remaining) averages into the running average, using xarray methods for better aligning time axis
-            n_left = len(all_last_projected)
-            if n_left > 0:
-                self.all_curves = xr.concat([self.all_curves[-self.n_averages + n_left:], *all_last_projected], 'avg')
-                self.running_average = self.all_curves.mean('avg').dropna('time')
+                # if all_curves is not initialized yet, take one of the projected datasets and use it as first average
+                if self.all_curves is None:
+                    self.all_curves = processed_dataarray
+                    self.running_average = all_last_projected.pop(0).dropna('time')
 
-            self.newAverage.emit(self.running_average)
+                # concatenate all (remaining) averages into the running average, using xarray methods for better aligning time axis
+                n_left = len(all_last_projected)
+                if n_left > 0:
+                    self.all_curves = xr.concat([self.all_curves[-self.n_averages + n_left:], *all_last_projected], 'avg')
+                    self.running_average = self.all_curves.mean('avg').dropna('time')
 
-            # evaluate how long it took to update the average, and define how many cycles to skip based on the "maximum
-            # processing time" defined in self._max_avg_calc_time. This should be much shorter than one cycle of the
-            # shaker (1/10th)
-            t_tot = (time.time() - t0) * 1000
-            if t_tot > self._max_avg_calc_time:
-                self._skip_average = t_tot // self._max_avg_calc_time
-            self.logger.debug('calculated average in {:.2f} ms'.format(t_tot))
-        else:
-            self.logger.debug(
-                'skipping average calculation, {} , queue size: {}'.format(-self._skip_average, self.processed_qsize))
-            self._skip_average -= 1
+                self.newAverage.emit(self.running_average)
 
-        if self._calculate_autocorrelation:
-            self.fit_autocorrelation(self.running_average)
+                # evaluate how long it took to update the average, and define how many cycles to skip based on the "maximum
+                # processing time" defined in self._max_avg_calc_time. This should be much shorter than one cycle of the
+                # shaker (1/10th)
+                t_tot = (time.time() - t0) * 1000
+                if t_tot > self._max_avg_calc_time:
+                    self._skip_average = t_tot // self._max_avg_calc_time
+                self.logger.debug('calculated average in {:.2f} ms'.format(t_tot))
+            else:
+                self.logger.debug(
+                    'skipping average calculation, {} , queue size: {}'.format(-self._skip_average, self.processed_qsize))
+                self._skip_average -= 1
+
+            if self._calculate_autocorrelation:
+                self.start_autocorrelation_worker(self.running_average)
 
     @QtCore.pyqtSlot(dict)
     def on_fit_result(self, fitDict):
@@ -942,7 +974,7 @@ class FastScanStreamer(QtCore.QObject):
 
         self.init_ni_channels()
 
-        self.should_stop = True # when true it does not start a new measurement iteration.
+        self.should_stop = True  # when true it does not start a new measurement iteration.
 
     def init_ni_channels(self):  # TODO: choose channels from settings
 
