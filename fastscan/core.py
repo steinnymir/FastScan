@@ -147,9 +147,9 @@ class FastScanThreadManager(QtCore.QObject):
         # runnable.signals.result.connect(self.on_fit_result)
         runnable.signals.result.connect(self.newFitResult.emit)
 
-    # ---------------------------------
+
     # Streamer management methods
-    # ---------------------------------
+
     def create_streamer(self):
         """ Generate the streamer thread.
 
@@ -181,9 +181,9 @@ class FastScanThreadManager(QtCore.QObject):
         self.streamer.stop_acquisition()
         self._should_stop = True
 
-    # ---------------------------------
+
     # data handling pipeline
-    # ---------------------------------
+
     @QtCore.pyqtSlot()
     def on_timer(self):
         """ Timer event.
@@ -312,9 +312,9 @@ class FastScanThreadManager(QtCore.QObject):
         """ Slot to bounce the fit result signal."""
         self.newFitResult.emit(fitDict)
 
-    # ---------------------------------
+
     # data I/O
-    # ---------------------------------
+
     @QtCore.pyqtSlot()
     def reset_data(self):
         """ Reset the data in memory, by reinitializing all data containers.
@@ -367,9 +367,9 @@ class FastScanThreadManager(QtCore.QObject):
             self.logger.info('no data to save yet...')
             # f.create_group('/settings')
 
-    # ---------------------------------
+
     # shaker calibration
-    # ---------------------------------
+
     def calibrate_shaker(self, iterations, integration):
         """
         Shaker calibration method.
@@ -470,9 +470,9 @@ class FastScanThreadManager(QtCore.QObject):
 
         plt.show()
 
-    # ---------------------------------
+
     # iterative temperature measurement
-    # ---------------------------------
+
     def start_iterative_measurement(self, temperatures, savename):
         """ Starts a temperature dependence scan series.
 
@@ -1170,6 +1170,8 @@ def simulate_measure(data, function='sech2_fwhm', args=[.5, -2, .085, 1],
     data[1, ::2] = f(data[0, ::2], *args_) + noise[::2] + data[0, ::2] / 3
     data[2, ::2] = True
     data[2, 1::2] = False
+    if data.shape[0] == 4:
+        data[3,:] = 2
 
     return data
 

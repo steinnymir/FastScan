@@ -6,6 +6,8 @@ DTYPE = np.float64
 ctypedef np.float_t DTYPE_t
 ctypedef np.int_t DTYPE_i
 
+
+
 @cython.boundscheck(False) # turn off bounds-checking for entire function
 @cython.wraparound(False)  # turn off negative index wrapping for entire function
 def project_r0(
@@ -15,7 +17,7 @@ def project_r0(
         np.ndarray[DTYPE_t, ndim = 1]  reference,
         bint use_dark_control):
     cdef int n_pts, pos_min, res_size, i, pos, count
-    cdef float r0, val,ref
+    cdef float r0, val, ref, r0_
 
     n_pts = len(spos)
     pos_min = spos.min()
@@ -48,8 +50,17 @@ def project_r0(
             result_val[spos[i]-pos_min] += signal[i]
             result_ref[spos[i]-pos_min] += reference[i]
             norm_array[spos[i]-pos_min] += 1.
+    print(np.sum(result_ref),np.sum(norm_array))
 
-    r0 = np.nanmean(result_ref/norm_array)
+    count = 0
+    for i in range(len(norm_array)):
+        if norm_array[i] != 0:
+            r0 += result_ref[i]/norm_array[i]
+            count += 1
+    r0 = r0/count
+    print(r0)
+
+    # r0 = np.mean(np.nan_to_num(result_ref/norm_array))
     return result_val/(norm_array*r0)
 
 
