@@ -664,8 +664,8 @@ class FastScanMainWindow(QMainWindow):
 
 
         string = 'Data Size :\n streamer: {} - {}\n projected: {} - {}\n Queues: Stream: {} Projected: {}\n Cycles per Second [Hz]: {:10.3f}       '.format(
-            streamer_shape, repr_byte_size(np.prod(streamer_shape)),
-            projected_shape, repr_byte_size(np.prod(projected_shape)),
+            streamer_shape, repr_byte_size(64*np.prod(streamer_shape)),
+            projected_shape, repr_byte_size(64*np.prod(projected_shape)),
             self.data_manager.stream_qsize,
             self.data_manager.processed_qsize,
             fps,
