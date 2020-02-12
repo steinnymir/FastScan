@@ -108,7 +108,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._current_iteration = None  # keep track of which is the current iteration in the iterative measurement method.
         self._spos_fit_pars = None  # initialize the fit parameters for shaker position
         self._counter = 0  # Counter for thread safe wait function
-        self._calc_avg_with_worker = True
+        self._calc_avg_with_worker = parse_setting('fastscan', 'avg_use_worker')
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
