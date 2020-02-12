@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import QMainWindow, QDoubleSpinBox, \
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, QPushButton, QGridLayout, QSpinBox, QLabel, QFrame
 from pyqtgraph.Qt import QtCore as pQtCore, QtGui as pQtGui
 from scipy.signal import butter, filtfilt
-from fastscan.misc import parse_category, parse_setting, labeledQwidget, write_setting
+from fastscan.misc import parse_category, parse_setting, labeledQwidget, write_setting, repr_byte_size
 from fastscan.core import FastScanThreadManager
 
 try:
@@ -655,6 +655,7 @@ class FastScanMainWindow(QMainWindow):
         except AttributeError:
             streamer_shape = projected_shape = (0, 0)
         try:
+
             if len(self.fps_l) >10:
                 self.fps_l.pop(0)
             fps = np.mean(self.fps_l)
@@ -662,13 +663,12 @@ class FastScanMainWindow(QMainWindow):
             fps = 0
 
 
-        string = 'Data Size :\n streamer: {} - {:10.3f} Kb\n projected: {} - {:10.3f} Kb\n Queues: Stream: {} Projected: {}\n Cycles per Second [Hz]: {:10.3f}       '.format(
-            streamer_shape, np.prod(streamer_shape) / (1024),
-            projected_shape, np.prod(projected_shape) / (1024),
+        string = 'Data Size :\n streamer: {} - {}\n projected: {} - {}\n Queues: Stream: {} Projected: {}\n Cycles per Second [Hz]: {:10.3f}       '.format(
+            streamer_shape, repr_byte_size(np.prod(streamer_shape)),
+            projected_shape, repr_byte_size(np.prod(projected_shape)),
             self.data_manager.stream_qsize,
             self.data_manager.processed_qsize,
             fps,
-
         )
         self.datasize_label.setText(string)
 
@@ -1019,7 +1019,7 @@ class FastScanPlotWidget(QWidget):
         btn_area.setLayout(l)
         self.btn_autoscale = QPushButton('Autoscale')
         self.btn_autoscale.clicked.connect(self.set_autoscale)
-        self.btn_showall = QPushButton('Fixed')
+        self.btn_showall = QPushButton('Center view')
         self.btn_showall.clicked.connect(self.set_showall)
         self.btn_follow = QPushButton('Follow')
         self.btn_follow.clicked.connect(self.set_follow)

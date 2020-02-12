@@ -26,13 +26,13 @@ from configparser import ConfigParser
 
 import h5py
 import numpy as np
+import math
 import xarray as xr
 from PyQt5 import QtWidgets
 
 
-# -------------------------
 # Qt stuff
-# -------------------------
+
 def my_exception_hook(exctype, value, traceback):
     """error catching for qt in pycharm"""
     # Print the error and traceback
@@ -59,9 +59,8 @@ def labeledQwidget(label, widget, align='h'):
     return w
 
 
-# -------------------------
 # Settings persing
-# -------------------------
+
 def parse_category(category, settings_file='default'):
     """ parse setting file and return desired value
 
@@ -154,12 +153,22 @@ def write_setting(value, category, name, settings_file='default'):
         settings.write(configfile)
 
 
-# -------------------------
 # math
-# -------------------------
 
 def update_average(new, avg, n):
-    'recalculate average with new dataset.'
+    """ Update the average with new array.
+
+    Args
+        new: np.array
+            array with the new data to be added to the average. Must have same
+            dimensions as avg
+        avg: np.array
+            array of average of n arrays
+        n:
+            number n of arrays used to make avg
+    :return:
+        new average
+    """
     prev_n = (n - 1) / n
     # return (avg  * (n - 1) + new) / n
     return avg * prev_n + new / n
@@ -223,8 +232,22 @@ def read_h5(file):
     return dd
 
 
-# -------------------------
+def repr_byte_size(size_bytes):
+    """ Represent in a string the size in Bytes in a compact format.
+
+    Adapted from https://stackoverflow.com/questions/5194057/better-way-to-convert-file-sizes-in-python
+    Follows same notation as Windows does for files. See: https://en.wikipedia.org/wiki/Mebibyte
+    """
+    if size_bytes == 0:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return "%s %s" % (s, size_name[i])
+
+
 # exceptions
-# -------------------------
+
 class NoDataException(Exception):
     pass

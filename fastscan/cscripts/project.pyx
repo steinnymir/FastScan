@@ -50,7 +50,6 @@ def project_r0(
             result_val[spos[i]-pos_min] += signal[i]
             result_ref[spos[i]-pos_min] += reference[i]
             norm_array[spos[i]-pos_min] += 1.
-    print(np.sum(result_ref),np.sum(norm_array))
 
     count = 0
     for i in range(len(norm_array)):
@@ -58,9 +57,7 @@ def project_r0(
             r0 += result_ref[i]/norm_array[i]
             count += 1
     r0 = r0/count
-    print(r0)
-
-    # r0 = np.mean(np.nan_to_num(result_ref/norm_array))
+    # r0 = np.mean(np.nan_to_num(result_ref/norm_array)) # old method...
     return result_val/(norm_array*r0)
 
 
