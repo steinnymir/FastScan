@@ -141,6 +141,7 @@ class FastScanThreadManager(QtCore.QObject):
                             adc_step=self.shaker_position_step,
                             time_step=self.shaker_time_step,
                             use_r0=self.use_r0,
+                            cut_range=self.cut_range
                             )
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
@@ -695,6 +696,10 @@ class FastScanThreadManager(QtCore.QObject):
         """ Choose to output DR/R or DR. If True it's DR/R."""
         return parse_setting('fastscan', 'use_r0')
 
+    @property
+    def cut_range(self):
+        """ Choose to output DR/R or DR. If True it's DR/R."""
+        return parse_setting('fastscan', 'cut_range')
     @use_r0.setter
     def use_r0(self, val):
         assert isinstance(val, bool), 'use_r0 must be boolean.'
@@ -912,7 +917,7 @@ def fit_autocorrelation(da, expected_pulse_duration=.1):
 
 
 def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0.000152587890625, time_step=.05,
-              use_r0=True):
+              use_r0=True, cut_range=False):
     """
 
     Args:
@@ -955,8 +960,18 @@ def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0
     spos_fit_pars = popt
     spos = np.array(sin(x, *popt) / adc_step, dtype=int)
 
+    if cut_range:
+        lims = [np.argmin(spos),np.argmax(spos)]
+        f = min(lims)
+        t = max(lims)
+    else:
+        f,t = 0,-1
+    spos = spos[f:t]
+    signal = signal[f:t]
+    dark_control = dark_control[f:t]
+
     if use_r0:
-        reference = stream_data[3]
+        reference = stream_data[3][f:t]
         result = project_r0(spos, signal, dark_control, reference, use_dark_control)
     else:
         result = project(spos, signal, dark_control, use_dark_control)
