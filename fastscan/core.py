@@ -163,7 +163,8 @@ class FastScanThreadManager(QtCore.QObject):
             self.pool.start(runnable)
             runnable.signals.result.connect(self.on_updated_running_average)
         else:
-            self.logger.debug('no projections to work on....')
+            pass
+            # self.logger.debug('no projections to work on....')
 
     def on_updated_running_average(self, tpl):
         """ Store and emit new average dataset, and start a new average calculation"""
@@ -750,12 +751,16 @@ class FastScanThreadManager(QtCore.QObject):
     @property
     def shaker_position_step(self):
         """ Shaker position ADC step size in v"""
-        return parse_setting('fastscan', 'shaker_position_step')
+        shaker_position_step =  parse_setting('fastscan', 'shaker_position_step')
+        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_position_step * shaker_scaling_factor
 
     @property
     def shaker_ps_per_step(self):
         """ Shaker position ADC step size in ps"""
-        return parse_setting('fastscan', 'shaker_ps_per_step')
+        shaker_ps_per_step =  parse_setting('fastscan', 'shaker_ps_per_step')
+        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_ps_per_step * shaker_scaling_factor
 
     @property
     def shaker_time_step(self):
