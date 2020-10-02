@@ -948,7 +948,7 @@ def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0
 
     x = np.arange(0, stream_data.shape[1], 1)
 
-    if spos_fit_pars is None:
+    if spos_fit_pars is None: #TODO: generalise fitting parameters. this might break on new setups
         g_amp = spos_analog.max() - spos_analog.min()
         g_freq = 15000 / np.pi
         g_phase = 0
@@ -966,6 +966,7 @@ def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0
         t = max(lims)
     else:
         f,t = 0,-1
+
     spos = spos[f:t]
     signal = signal[f:t]
     dark_control = dark_control[f:t]
