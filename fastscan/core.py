@@ -83,6 +83,9 @@ class FastScanThreadManager(QtCore.QObject):
     # newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(Exception)
 
+    acquisition_started = QtCore.pyqtSignal()
+    acquisition_stopped = QtCore.pyqtSignal()
+
     def __init__(self):
         super().__init__()
 
@@ -219,6 +222,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._streamer_running = True
         self.create_streamer()
         self.streamer_thread.start()
+        self.acquisition_started.emit()
         self.logger.info('FastScanStreamer started')
         self.logger.debug('streamer settings: {}'.format(parse_category('fastscan')))
 
@@ -230,6 +234,7 @@ class FastScanThreadManager(QtCore.QObject):
         """
         self.logger.debug('\n\nFastScan Streamer is stopping.\n\n')
         self.streamer.stop_acquisition()
+        self.acquisition_stopped.emit()
         self._should_stop = True
 
     # data handling pipeline
@@ -412,6 +417,13 @@ class FastScanThreadManager(QtCore.QObject):
         self.all_curves = None
         self.n_streamer_averages = None
         self.streamer_average = None
+        for i in range(self.processed_qsize):
+            self._processed_queue.get()
+        for i in range(self.stream_qsize):
+            self._stream_queue.get()
+        # while not self._stream_queue.empty():
+        #     self._stream_queue.get()
+        # while not self._processed_queue.empty():
 
     def save_data(self, filename, all_data=True):
         """ Save data contained in memory.
@@ -434,6 +446,9 @@ class FastScanThreadManager(QtCore.QObject):
             filename += '.h5'
 
         if self.streamer_average is not None:
+            directory = os.path.dirname(filename) #TODO: fix folder not found error
+            if not os.path.isdir(directory):
+                os.mkdir(directory)
 
             with h5py.File(filename, 'w') as f:
 

@@ -692,6 +692,8 @@ class FastScanMainWindow(QMainWindow):
         manager.newFitResult.connect(self.on_fit_result)
         manager.newAverage.connect(self.on_avg_data)
         manager.error.connect(self.on_thread_error)
+        manager.acquisition_started.connect(self.on_acquisition_started)
+        manager.acquisition_stopped.connect(self.on_acquisition_stopped)
 
         manager_thread = QtCore.QThread()
         manager.moveToThread(manager_thread)
@@ -758,17 +760,25 @@ class FastScanMainWindow(QMainWindow):
 
     def start_acquisition(self):
         self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
+        # self.stop_button.setEnabled(True)
         # self.data_manager.create_streamer()
         self.status_bar.showMessage('Acquisition started')
         self.data_manager.start_streamer()
 
+    def on_acquisition_started(self):
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+
     @QtCore.pyqtSlot()
     def stop_acquisition(self):
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
+        # self.start_button.setEnabled(True)
+        # self.stop_button.setEnabled(False)
         self.status_bar.showMessage('Acquisition Stopped')
         self.data_manager.stop_streamer()
+
+    def on_acquisition_stopped(self):
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
 
     def reset_data(self):
         self.status_bar.showMessage('Data reset')
