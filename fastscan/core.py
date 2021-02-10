@@ -764,15 +764,29 @@ class FastScanThreadManager(QtCore.QObject):
     def shaker_position_step(self):
         """ Shaker position ADC step size in v"""
         shaker_position_step =  parse_setting('fastscan', 'shaker_position_step')
-        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
-        return shaker_position_step * shaker_scaling_factor
+        # shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_position_step * self.shaker_scaling_factor
 
     @property
     def shaker_ps_per_step(self):
         """ Shaker position ADC step size in ps"""
         shaker_ps_per_step =  parse_setting('fastscan', 'shaker_ps_per_step')
-        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
-        return shaker_ps_per_step * shaker_scaling_factor
+        # shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_ps_per_step * self.shaker_scaling_factor
+
+    @property
+    def shaker_scaling_factor(self):
+        """ Shaker resampling factor. Binns together n steps to reduce the number
+        of time points measured, reducing noise on each point by sqrt(n)."""
+        return parse_setting('fastscan', 'shaker_scaling_factor')
+
+    @shaker_scaling_factor.setter
+    def shaker_scaling_factor(self, val):
+        assert val > 0, 'Scaling factor should be positive.'
+        assert isinstance(val,int), 'Scaling factor should be an integer.'
+
+        write_setting(val, 'fastscan', 'shaker_scaling_factor')
+        self.logger.debug('shaker_scaling_factor set to {}'.format(val))
 
     @property
     def shaker_time_step(self):
