@@ -31,6 +31,9 @@ import numpy as np
 import xarray as xr
 from PyQt5 import QtCore
 
+sys.path.append('D:\code\FemtoScan')
+from instruments.cryostat import ITC503s as Cryostat
+
 try:
     import nidaqmx
     from nidaqmx import stream_readers
@@ -118,6 +121,9 @@ class FastScanThreadManager(QtCore.QObject):
         self.timer.timeout.connect(self.on_timer)
         self.timer.start()
 
+        # load instruments
+        self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
+
         # self.create_streamer()
 
     # data processing threads
@@ -186,7 +192,7 @@ class FastScanThreadManager(QtCore.QObject):
             da: xarray.DataArray
                 data after projection processing.
         """
-        runnable = Runnable(fit_autocorrelation, da, expected_pulse_duration=.1)
+        runnable = Runnable(fit_autocorrelation_wings, da)#, expected_pulse_duration=.1)
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_fit_result)
         # runnable.signals.result.connect(self.newFitResult.emit)
@@ -574,7 +580,8 @@ class FastScanThreadManager(QtCore.QObject):
         self.logger.info('starting measurement loop')
         self._current_iteration = 0
         # self.stop_streamer()
-
+        self.start_streamer()
+        time.sleep(2)
         self.start_next_iteration()
 
     @QtCore.pyqtSlot()
