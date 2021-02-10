@@ -31,6 +31,9 @@ import numpy as np
 import xarray as xr
 from PyQt5 import QtCore
 
+sys.path.append('D:\code\FemtoScan')
+from instruments.cryostat import ITC503s as Cryostat
+
 try:
     import nidaqmx
     from nidaqmx import stream_readers
@@ -118,6 +121,9 @@ class FastScanThreadManager(QtCore.QObject):
         self.timer.timeout.connect(self.on_timer)
         self.timer.start()
 
+        # load instruments
+        self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
+
         # self.create_streamer()
 
     # data processing threads
@@ -141,6 +147,7 @@ class FastScanThreadManager(QtCore.QObject):
                             adc_step=self.shaker_position_step,
                             time_step=self.shaker_time_step,
                             use_r0=self.use_r0,
+                            cut_range=self.cut_range
                             )
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
@@ -163,7 +170,8 @@ class FastScanThreadManager(QtCore.QObject):
             self.pool.start(runnable)
             runnable.signals.result.connect(self.on_updated_running_average)
         else:
-            self.logger.debug('no projections to work on....')
+            pass
+            # self.logger.debug('no projections to work on....')
 
     def on_updated_running_average(self, tpl):
         """ Store and emit new average dataset, and start a new average calculation"""
@@ -184,7 +192,7 @@ class FastScanThreadManager(QtCore.QObject):
             da: xarray.DataArray
                 data after projection processing.
         """
-        runnable = Runnable(fit_autocorrelation, da, expected_pulse_duration=.1)
+        runnable = Runnable(fit_autocorrelation_wings, da)#, expected_pulse_duration=.1)
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_fit_result)
         # runnable.signals.result.connect(self.newFitResult.emit)
@@ -572,7 +580,8 @@ class FastScanThreadManager(QtCore.QObject):
         self.logger.info('starting measurement loop')
         self._current_iteration = 0
         # self.stop_streamer()
-
+        self.start_streamer()
+        time.sleep(2)
         self.start_next_iteration()
 
     @QtCore.pyqtSlot()
@@ -694,6 +703,10 @@ class FastScanThreadManager(QtCore.QObject):
         """ Choose to output DR/R or DR. If True it's DR/R."""
         return parse_setting('fastscan', 'use_r0')
 
+    @property
+    def cut_range(self):
+        """ Choose to output DR/R or DR. If True it's DR/R."""
+        return parse_setting('fastscan', 'cut_range')
     @use_r0.setter
     def use_r0(self, val):
         assert isinstance(val, bool), 'use_r0 must be boolean.'
@@ -750,12 +763,16 @@ class FastScanThreadManager(QtCore.QObject):
     @property
     def shaker_position_step(self):
         """ Shaker position ADC step size in v"""
-        return parse_setting('fastscan', 'shaker_position_step')
+        shaker_position_step =  parse_setting('fastscan', 'shaker_position_step')
+        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_position_step * shaker_scaling_factor
 
     @property
     def shaker_ps_per_step(self):
         """ Shaker position ADC step size in ps"""
-        return parse_setting('fastscan', 'shaker_ps_per_step')
+        shaker_ps_per_step =  parse_setting('fastscan', 'shaker_ps_per_step')
+        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_ps_per_step * shaker_scaling_factor
 
     @property
     def shaker_time_step(self):
@@ -907,7 +924,7 @@ def fit_autocorrelation(da, expected_pulse_duration=.1):
 
 
 def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0.000152587890625, time_step=.05,
-              use_r0=True):
+              use_r0=True, cut_range=False):
     """
 
     Args:
@@ -938,7 +955,7 @@ def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0
 
     x = np.arange(0, stream_data.shape[1], 1)
 
-    if spos_fit_pars is None:
+    if spos_fit_pars is None: #TODO: generalise fitting parameters. this might break on new setups
         g_amp = spos_analog.max() - spos_analog.min()
         g_freq = 15000 / np.pi
         g_phase = 0
@@ -950,8 +967,19 @@ def projector(stream_data, spos_fit_pars=None, use_dark_control=True, adc_step=0
     spos_fit_pars = popt
     spos = np.array(sin(x, *popt) / adc_step, dtype=int)
 
+    if cut_range:
+        lims = [np.argmin(spos),np.argmax(spos)]
+        f = min(lims)
+        t = max(lims)
+    else:
+        f,t = 0,-1
+
+    spos = spos[f:t]
+    signal = signal[f:t]
+    dark_control = dark_control[f:t]
+
     if use_r0:
-        reference = stream_data[3]
+        reference = stream_data[3][f:t]
         result = project_r0(spos, signal, dark_control, reference, use_dark_control)
     else:
         result = project(spos, signal, dark_control, use_dark_control)
