@@ -642,6 +642,7 @@ class FastScanThreadManager(QtCore.QObject):
 
         savename = self.iterative_measurement_name + temp_string
         self.logger.info('Iteration {} complete. Saved data as {}'.format(self._current_iteration, savename))
+        print(savename)
         self.save_data(savename)
 
         self.stop_streamer()
