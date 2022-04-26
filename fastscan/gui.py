@@ -481,6 +481,19 @@ class FastScanMainWindow(QMainWindow):
         settings_box_layout.addWidget(QLabel('n° of samples'), 0, 0)
         settings_box_layout.addWidget(self.spinbox_n_samples, 0, 1)
 
+        self.spinbox_shaker_scaling_factor = QSpinBox()
+        self.spinbox_shaker_scaling_factor.setMaximum(10000)
+        self.spinbox_shaker_scaling_factor.setMinimum(1)
+        self.spinbox_shaker_scaling_factor.setValue(parse_setting('fastscan', 'shaker_scaling_factor'))
+        self.spinbox_shaker_scaling_factor.setSingleStep(1)
+        self.spinbox_shaker_scaling_factor.valueChanged.connect(self.set_spinbox_shaker_scaling_factor)
+        settings_box_layout.addWidget(QLabel('Scaling factor'), 1, 0)
+        settings_box_layout.addWidget(self.spinbox_shaker_scaling_factor, 1, 1)
+
+        self.label_resolution = QLabel()
+        self.update_label_resolution()
+        settings_box_layout.addWidget(self.label_resolution, 1, 2)
+
         self.label_processor_fps = QLabel('FPS: 0')
         # settings_box_layout.addWidget(self.label_processor_fps)
 
@@ -494,12 +507,11 @@ class FastScanMainWindow(QMainWindow):
         else:
             self.shaker_gain_combobox.setCurrentIndex(idx)
 
-        def set_shaker_gain(val):
-            self.data_manager.shaker_gain = val
 
-        self.shaker_gain_combobox.activated[str].connect(set_shaker_gain)
-        settings_box_layout.addWidget(QLabel('Shaker Gain'), 1, 0)
-        settings_box_layout.addWidget(self.shaker_gain_combobox, 1, 1)
+
+        self.shaker_gain_combobox.activated[str].connect(self.set_shaker_gain)
+        settings_box_layout.addWidget(QLabel('Shaker Gain'), 3, 0)
+        settings_box_layout.addWidget(self.shaker_gain_combobox, 3, 1)
 
         # self.filter_frequency_spinbox.setMaximum(1.)
         # self.filter_frequency_spinbox.setMinimum(0.0)
@@ -680,6 +692,8 @@ class FastScanMainWindow(QMainWindow):
         manager.newFitResult.connect(self.on_fit_result)
         manager.newAverage.connect(self.on_avg_data)
         manager.error.connect(self.on_thread_error)
+        manager.acquisition_started.connect(self.on_acquisition_started)
+        manager.acquisition_stopped.connect(self.on_acquisition_stopped)
 
         manager_thread = QtCore.QThread()
         manager.moveToThread(manager_thread)
@@ -746,17 +760,25 @@ class FastScanMainWindow(QMainWindow):
 
     def start_acquisition(self):
         self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
+        # self.stop_button.setEnabled(True)
         # self.data_manager.create_streamer()
         self.status_bar.showMessage('Acquisition started')
         self.data_manager.start_streamer()
 
+    def on_acquisition_started(self):
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+
     @QtCore.pyqtSlot()
     def stop_acquisition(self):
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
+        # self.start_button.setEnabled(True)
+        # self.stop_button.setEnabled(False)
         self.status_bar.showMessage('Acquisition Stopped')
         self.data_manager.stop_streamer()
+
+    def on_acquisition_stopped(self):
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
 
     def reset_data(self):
         self.status_bar.showMessage('Data reset')
@@ -765,6 +787,24 @@ class FastScanMainWindow(QMainWindow):
 
     def set_n_samples(self, var):
         self.data_manager.n_samples = var
+
+    def set_spinbox_shaker_scaling_factor(self, var):
+        self.data_manager.shaker_scaling_factor = var
+        self.update_label_resolution()
+
+    def set_shaker_gain(self, val):
+        self.data_manager.shaker_gain = val
+        self.update_label_resolution()
+
+    def update_label_resolution(self):
+        stepSize = self.data_manager.shaker_time_step*1000
+        if stepSize>10:
+            s = '{:5} fs/px'.format(int(stepSize))
+        elif stepSize<1:
+            s = '{:5.3f} fs/px'.format(stepSize)
+        else:
+            s = '{:5.1f} fs/px'.format(stepSize)
+        self.label_resolution.setText(s)
 
     @QtCore.pyqtSlot(int)
     def set_n_averages(self, val):

@@ -83,6 +83,9 @@ class FastScanThreadManager(QtCore.QObject):
     # newData = QtCore.pyqtSignal(np.ndarray)
     error = QtCore.pyqtSignal(Exception)
 
+    acquisition_started = QtCore.pyqtSignal()
+    acquisition_stopped = QtCore.pyqtSignal()
+
     def __init__(self):
         super().__init__()
 
@@ -219,6 +222,7 @@ class FastScanThreadManager(QtCore.QObject):
         self._streamer_running = True
         self.create_streamer()
         self.streamer_thread.start()
+        self.acquisition_started.emit()
         self.logger.info('FastScanStreamer started')
         self.logger.debug('streamer settings: {}'.format(parse_category('fastscan')))
 
@@ -230,6 +234,7 @@ class FastScanThreadManager(QtCore.QObject):
         """
         self.logger.debug('\n\nFastScan Streamer is stopping.\n\n')
         self.streamer.stop_acquisition()
+        self.acquisition_stopped.emit()
         self._should_stop = True
 
     # data handling pipeline
@@ -412,6 +417,13 @@ class FastScanThreadManager(QtCore.QObject):
         self.all_curves = None
         self.n_streamer_averages = None
         self.streamer_average = None
+        for i in range(self.processed_qsize):
+            self._processed_queue.get()
+        for i in range(self.stream_qsize):
+            self._stream_queue.get()
+        # while not self._stream_queue.empty():
+        #     self._stream_queue.get()
+        # while not self._processed_queue.empty():
 
     def save_data(self, filename, all_data=True):
         """ Save data contained in memory.
@@ -434,6 +446,9 @@ class FastScanThreadManager(QtCore.QObject):
             filename += '.h5'
 
         if self.streamer_average is not None:
+            directory = os.path.dirname(filename) #TODO: fix folder not found error
+            if not os.path.isdir(directory):
+                os.mkdir(directory)
 
             with h5py.File(filename, 'w') as f:
 
@@ -627,6 +642,7 @@ class FastScanThreadManager(QtCore.QObject):
 
         savename = self.iterative_measurement_name + temp_string
         self.logger.info('Iteration {} complete. Saved data as {}'.format(self._current_iteration, savename))
+        print(savename)
         self.save_data(savename)
 
         self.stop_streamer()
@@ -764,15 +780,29 @@ class FastScanThreadManager(QtCore.QObject):
     def shaker_position_step(self):
         """ Shaker position ADC step size in v"""
         shaker_position_step =  parse_setting('fastscan', 'shaker_position_step')
-        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
-        return shaker_position_step * shaker_scaling_factor
+        # shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_position_step * self.shaker_scaling_factor
 
     @property
     def shaker_ps_per_step(self):
         """ Shaker position ADC step size in ps"""
         shaker_ps_per_step =  parse_setting('fastscan', 'shaker_ps_per_step')
-        shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
-        return shaker_ps_per_step * shaker_scaling_factor
+        # shaker_scaling_factor =  parse_setting('fastscan', 'shaker_scaling_factor')
+        return shaker_ps_per_step * self.shaker_scaling_factor
+
+    @property
+    def shaker_scaling_factor(self):
+        """ Shaker resampling factor. Binns together n steps to reduce the number
+        of time points measured, reducing noise on each point by sqrt(n)."""
+        return parse_setting('fastscan', 'shaker_scaling_factor')
+
+    @shaker_scaling_factor.setter
+    def shaker_scaling_factor(self, val):
+        assert val > 0, 'Scaling factor should be positive.'
+        assert isinstance(val,int), 'Scaling factor should be an integer.'
+
+        write_setting(val, 'fastscan', 'shaker_scaling_factor')
+        self.logger.debug('shaker_scaling_factor set to {}'.format(val))
 
     @property
     def shaker_time_step(self):
