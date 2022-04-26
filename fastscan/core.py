@@ -119,10 +119,13 @@ class FastScanThreadManager(QtCore.QObject):
         # self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
         # self.delay_stage = DelayStage()
 
+        # master clock which calls `on_timer`
         self.timer = QtCore.QTimer()
-        self.timer.setInterval(1)
+        self.timer.setInterval(self.master_clock)
         self.timer.timeout.connect(self.on_timer)
         self.timer.start()
+
+        self._avg_timeout = 0
 
         # load instruments
         self.cryo = Cryostat(parse_setting('instruments', 'cryostat_com'))
@@ -154,9 +157,7 @@ class FastScanThreadManager(QtCore.QObject):
                             )
         self.pool.start(runnable)
         runnable.signals.result.connect(self.on_projector_data)
-#        if self._calc_avg_with_worker:
-#            self.logger.debug('Launching new average updater')
-#            self.update_average_worker() # start the average updater.
+
 
     def update_average_worker(self):
         new_projections = []
@@ -185,8 +186,8 @@ class FastScanThreadManager(QtCore.QObject):
         self.newAverage.emit(self.running_average)
         if self._calculate_autocorrelation:
             self.start_autocorrelation_worker(self.running_average)
-        if not self._should_stop:
-            self.update_average_worker()
+        # if not self._should_stop:
+        #     self.update_average_worker()
 
     def start_autocorrelation_worker(self, da):
         """ Uses a thread to fit the autocorrelation function to the projected data.
@@ -249,7 +250,10 @@ class FastScanThreadManager(QtCore.QObject):
          - to increase the _counter for 'wait' function
          - maybe other stuff too...
         """
-        if not self._updating_avg:
+        if self._updating_avg and self._avg_timer < self.averaging_timeout:
+            self._avg_timer += self.master_clock
+        else:
+            self._avg_timer = 0
             self.update_average_worker()
 
         # Stop the streamer if button was pressed
@@ -269,16 +273,6 @@ class FastScanThreadManager(QtCore.QObject):
                     'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
         except Exception as e:
             self.logger.debug('Queue error: {}'.format(e))
-
-        # when projected data is available, calculate the new average
-        # try:
-        #     if not self._stream_queue.empty():
-        #         _to_project = self._stream_queue.get()
-        #         self.start_projector_worker(_to_project)
-        #         self.logger.debug(
-        #             'Projecting an element from streamer queue: {} elements remaining'.format(self.stream_qsize))
-        # except Exception as e:
-        #     self.logger.debug('Queue error: {}'.format(e))
 
         # manage iterative measurement. Start next step whien n_averages has been reached.
         if self._recording_iteration:
@@ -697,7 +691,7 @@ class FastScanThreadManager(QtCore.QObject):
 
     @property
     def processed_qsize(self):
-        """ State of dark control. If True it's on."""
+        """ size of the processed queue"""
         try:
             val = self._processed_queue.qsize()
         except:
@@ -713,6 +707,26 @@ class FastScanThreadManager(QtCore.QObject):
     def dark_control(self, val):
         assert isinstance(val, bool), 'dark control must be boolean.'
         write_setting(val, 'fastscan', 'dark_control')
+
+    @property
+    def averaging_timeout(self):
+        """ number of clock cycles to wait before forcefully computing the average."""
+        return parse_setting('fastscan', 'averaging_timeout')
+
+    @averaging_timeout.setter
+    def averaging_timeout(self, val):
+        assert isinstance(val, int), 'averaging_timeout must be integ er.'
+        write_setting(val, 'fastscan', 'averaging_timeout')
+
+    @property
+    def master_clock(self):
+        """ set the master clock frequency."""
+        return parse_setting('fastscan', 'master_clock')
+
+    @master_clock.setter
+    def master_clock(self, val):
+        assert isinstance(val, int), 'average_timeout must be integer.'
+        write_setting(val, 'fastscan', 'master_clock')
 
     @property
     def use_r0(self):
