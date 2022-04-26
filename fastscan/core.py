@@ -78,6 +78,8 @@ class FastScanThreadManager(QtCore.QObject):
     newProcessedData = QtCore.pyqtSignal(xr.DataArray)
     newFitResult = QtCore.pyqtSignal(dict)
     newAverage = QtCore.pyqtSignal(xr.DataArray)
+    newChunk = QtCore.pyqtSignal(xr.DataArray)
+
     # acquisitionStopped = QtCore.pyqtSignal()
     # finished = QtCore.pyqtSignal()
     # newData = QtCore.pyqtSignal(np.ndarray)
@@ -94,6 +96,7 @@ class FastScanThreadManager(QtCore.QObject):
 
         # multiprocessing variables
         self._stream_queue = mp.Queue()  # Queue where to store unprocessed streamer data
+        self._chunk_queue = mp.Queue()
         self._processed_queue = mp.Queue()  # Queue where to store projected data
         self.pool = QtCore.QThreadPool()
         self.pool.setMaxThreadCount(self.n_processors)
@@ -250,6 +253,20 @@ class FastScanThreadManager(QtCore.QObject):
          - to increase the _counter for 'wait' function
          - maybe other stuff too...
         """
+        if self.chunked_mode:
+            try:
+                if self._chunk_queue.qsize() >= self.chunk_size:
+                    self.logger.debug('chunking together {} curves'.format(self.chunk_size))
+
+                    chunk = []
+                    for i in range(self.chunk_size):
+                        chunk.append(self._chunk_queue.get().dropna('time'))
+                    chunk_avg = xr.concat(chunk,'tmp').mean('tmp').dropna('time')
+                    self._processed_queue.put(chunk_avg)
+                    self.newChunk.emit(chunk_avg)
+            except Empty:
+                self.logger.debug('queue reported empty. actual size: {}'.format(self._chunk_queue.qsize()))
+
         if self._updating_avg and self._avg_timer < self.averaging_timeout:
             self._avg_timer += self.master_clock
         else:
@@ -345,9 +362,14 @@ class FastScanThreadManager(QtCore.QObject):
         # send data to GUI for plotting "last curve"
         self.newProcessedData.emit(processed_dataarray)
         # add to queue for average calculation
-        self._processed_queue.put(processed_dataarray)
-        self.logger.debug('Added processed curve to queue')
+        if self.chunked_mode:
+            self._chunk_queue.put(processed_dataarray)
+            self.logger.debug('Added processed curve to chunk_queue')
+        else:
+            self._processed_queue.put(processed_dataarray)
+            self.logger.debug('Added processed curve to processed_queue')
 
+        # TODO: change to follow chunked methodology
         if not self._calc_avg_with_worker:
 
             if self._skip_average == 0:
@@ -727,6 +749,25 @@ class FastScanThreadManager(QtCore.QObject):
     def master_clock(self, val):
         assert isinstance(val, int), 'average_timeout must be integer.'
         write_setting(val, 'fastscan', 'master_clock')
+
+
+    @property
+    def chunk_size(self):
+        return parse_setting('fastscan', 'chunk_size')
+
+    @chunk_size.setter
+    def chunk_size(self,val):
+        assert isinstance(val,int), "chunk size must be integer"
+        write_setting(val, 'fastscan', 'chunk_size')
+
+    @property
+    def chunked_mode(self):
+        return parse_setting('fastscan', 'chunked_mode')
+
+    @chunked_mode.setter
+    def chunked_mode(self, val):
+        assert isinstance(val, bool), "chunked_mode must be boolean"
+        write_setting(val, 'fastscan', 'chunked_mode')
 
     @property
     def use_r0(self):

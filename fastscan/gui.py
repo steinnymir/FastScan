@@ -414,9 +414,15 @@ class FastScanMainWindow(QMainWindow):
         acquisition_box_layout.addWidget(QLabel('Averages: '), 2, 0, 1, 1)
         acquisition_box_layout.addWidget(self.n_averages_spinbox, 2, 1, 1, 1)
 
-        # self.shakercalib_btn = QPushButton('Calibrate!')
-        # acquisition_box_layout.addWidget(self.shakercalib_btn, 2, 2, 1, 1)
-        # self.shakercalib_btn.clicked.connect(self.try_shaker_calib)
+        self.chunk_size_spinbox = QSpinBox()
+        self.chunk_size_spinbox.setMinimum(1)
+        self.chunk_size_spinbox.setMaximum(999999)
+
+        self.chunk_size_spinbox.setValue(parse_setting('fastscan', 'chunk_size'))
+        self.chunk_size_spinbox.valueChanged[int].connect(lambda x: write_setting(x, 'fastscan', 'chunk_size'))
+
+        acquisition_box_layout.addWidget(QLabel('Chunk Size: '), 3, 0, 1, 1)
+        acquisition_box_layout.addWidget(self.chunk_size_spinbox, 3, 1, 1, 1)
 
         # ----------------------------------------------------------------------
         # Save Box
@@ -691,6 +697,7 @@ class FastScanMainWindow(QMainWindow):
         manager.newStreamerData.connect(self.on_streamer_data)
         manager.newFitResult.connect(self.on_fit_result)
         manager.newAverage.connect(self.on_avg_data)
+        manager.newChunk.connect(self.on_chunk_data)
         manager.error.connect(self.on_thread_error)
         manager.acquisition_started.connect(self.on_acquisition_started)
         manager.acquisition_stopped.connect(self.on_acquisition_stopped)
@@ -746,6 +753,11 @@ class FastScanMainWindow(QMainWindow):
     def on_avg_data(self, da):
         # self.apply_filter(da)
         self.visual_widget.plot_avg_curve(da)
+
+    @QtCore.pyqtSlot(xr.DataArray)
+    def on_chunk_data(self, da):
+        # self.apply_filter(da)
+        self.visual_widget.plot_chunk_curve(da)
 
     def on_streamer_data(self, data):
         self.visual_widget.plot_stream_curve(data)
@@ -877,12 +889,17 @@ class PlotWidget(QWidget):
         self.cb_last_curve = QCheckBox('last curve')
         controls_layout.addWidget(self.cb_last_curve, 0, 0)
         self.cb_last_curve.setChecked(True)
+
+        self.cb_chunk_curve = QCheckBox('Chunk curve')
+        controls_layout.addWidget(self.cb_chunk_curve, 1, 0)
+        self.cb_chunk_curve.setChecked(True)
+
         self.cb_avg_curve = QCheckBox('average curve')
-        controls_layout.addWidget(self.cb_avg_curve, 1, 0)
+        controls_layout.addWidget(self.cb_avg_curve, 2, 0)
         self.cb_avg_curve.setChecked(False)
 
         self.cb_fit_curve = QCheckBox('fit curve')
-        controls_layout.addWidget(self.cb_fit_curve, 2, 0)
+        controls_layout.addWidget(self.cb_fit_curve, 3, 0)
         self.cb_fit_curve.setChecked(True)
 
         self.cb_remove_baseline = QCheckBox('Remove Baseline')
@@ -1100,13 +1117,19 @@ class FastScanPlotWidget(QWidget):
         curve_list_layout = QVBoxLayout()
         curve_list.setLayout(curve_list_layout)
 
-        self.cb_last_curve = QCheckBox('last curve')
+        self.cb_last_curve = QCheckBox('Last curve')
         curve_list_layout.addWidget(self.cb_last_curve)
         self.cb_last_curve.setChecked(False)
-        self.cb_avg_curve = QCheckBox('average curve')
+
+        self.cb_chunk_curve = QCheckBox('Chunk curve')
+        curve_list_layout.addWidget(self.cb_chunk_curve)
+        self.cb_chunk_curve.setChecked(True)
+
+        self.cb_avg_curve = QCheckBox('Average curve')
         curve_list_layout.addWidget(self.cb_avg_curve)
         self.cb_avg_curve.setChecked(True)
-        self.cb_fit_curve = QCheckBox('fit curve')
+
+        self.cb_fit_curve = QCheckBox('Fit curve')
         curve_list_layout.addWidget(self.cb_fit_curve)
         self.cb_fit_curve.setChecked(True)
 
@@ -1204,7 +1227,7 @@ class FastScanPlotWidget(QWidget):
         """ Plots data from the last available projected dataset"""
         if self.cb_last_curve.isChecked():
             if 'last' not in self.curves:
-                self.add_curve('last', color=(200, 200, 200), alpha=.1)
+                self.add_curve('last', color=(100, 100, 100), alpha=.1)
             da_ = self.post_process(da)
             self.draw_curve('last', da_)
         else:
@@ -1224,6 +1247,20 @@ class FastScanPlotWidget(QWidget):
         else:
             if 'avg' in self.curves:
                 self.main_plot.removeItem(self.curves.pop('avg'))
+
+    @QtCore.pyqtSlot()
+    def plot_chunk_curve(self, da):
+        """ Plots data from the last available averaged dataset"""
+        if self.cb_chunk_curve.isChecked():
+            if 'chunked' not in self.curves:
+                self.add_curve('chunked', color=(200, 200, 200), width=1,alpha=.5)
+
+            self._calculate_noise_floor(da)
+            da_ = self.post_process(da, cutEdges=True)
+            self.draw_curve('chunked', da_)  # plot the curve
+        else:
+            if 'chunked' in self.curves:
+                self.main_plot.removeItem(self.curves.pop('chunked'))
 
     @QtCore.pyqtSlot()
     def clean_plot(self):
